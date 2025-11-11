@@ -1,9 +1,6 @@
-﻿using System.ComponentModel;
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.IO;
 using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using Windows.Media.Control;
@@ -27,11 +24,16 @@ namespace QuackOSD
 
         private bool _isPreviewMode = false;
 
+        private bool _isDraggingSeekbar = false;
+        private double _lastSeekbarPercentage = 0;
+
         //for progress bar prediction
         private TimeSpan _lastPosition = TimeSpan.Zero;
         private DateTime _lastUpdateTime = DateTime.Now;
         private bool _isPlaying = false;
         private double _playbackRate = 1;
+        private string _lastTimeText = "";
+        private string _lastTotalTimeText = "";
 
         public MainWindow(OsdWindow osd, SettingsWindow settings)
         {
@@ -43,11 +45,7 @@ namespace QuackOSD
             InitializeOsd();
             _ = StartMediaSpyAsync();
 
-            _osdWindow.AnimationCompleted += (s, e) =>
-            {
-                _progressTimer.Stop();
-            };
-
+            _osdWindow.AnimationCompleted += (s, e) => _progressTimer.Stop();
             _osdWindow.SizeChanged += (s, e) => _osdWindow.UpdatePosition();
 
             _settingsWindow.IsVisibleChanged += (s, e) =>
@@ -81,8 +79,6 @@ namespace QuackOSD
                 }
             };
             _settingsWindow.Closed += (s, e) => ExitPreviewMode();
-
-            // Questo ci serve per pulire l'icona quando l'app si chiude
             System.Windows.Application.Current.Exit += OnApplicationExit;
         }
 
@@ -105,6 +101,11 @@ namespace QuackOSD
             _osdWindow.PlayPauseClicked += OsdWindow_PlayPauseClicked;
             _osdWindow.NextClicked += OsdWindow_NextClicked;
 
+            //progress bar click to seek
+            _osdWindow.SeekRequested += async (percentage) => await OsdWindow_SeekRequested(percentage);
+            _osdWindow.DragStarted += OsdWindow_DragStarted;
+            _osdWindow.DragEnded += OsdWindow_DragEnded;
+
             //setup icon in system tray
             InitializeTrayIcon();
 
@@ -122,7 +123,7 @@ namespace QuackOSD
             trayMenu.Items.Add("-"); //separator
             trayMenu.Items.Add("Esci da QuackOSD", null, (s, e) => System.Windows.Application.Current.Shutdown());
 
-            // 2. Inizializza l'oggetto NotifyIcon
+            //create tray icon
             _notifyIcon = new NotifyIcon
             {
                 Text = "QuackOSD", //hover
@@ -132,7 +133,7 @@ namespace QuackOSD
             //open settings windows when double click
             _notifyIcon.DoubleClick += (s, e) => OpenSettings();
 
-            // 3. Carica l'icona
+            //load icon from resources
             try
             {
                 var iconUri = new Uri("pack://application:,,,/QuackOSD;component/quack.ico");
@@ -150,12 +151,12 @@ namespace QuackOSD
             }
             catch (Exception ex)
             {
-                // Se non trova l'icona, userà una icona di default
+                //if icon not found
                 Debug.WriteLine("ERRORE: Icona non trovata. " + ex.Message);
             }
         }
 
-        // --- Metodo di pulizia ---
+        //clean up on exit
         private void OnApplicationExit(object sender, ExitEventArgs e)
         {
             // Rimuove l'icona dalla tray quando l'app si chiude
@@ -188,6 +189,12 @@ namespace QuackOSD
 
             //stop osd fade out to enter "live preview"
             _osdHideTimer.Stop();
+
+            if (Properties.Settings.Default.ShowTimeLine && _lastTimeline != null)
+            {
+                _progressTimer.Start();
+                UpdateProgressBarVisuals();
+            }
         }
 
         private void ExitPreviewMode()
@@ -211,7 +218,7 @@ namespace QuackOSD
         }
 
 
-        // --- Gestori Eventi Pulsanti OSD (CODICE INVARIATO) ---
+        //button event handlers
         private async void OsdWindow_PrevClicked(object sender, RoutedEventArgs e)
         {
             if (_currentSession != null)
@@ -238,6 +245,56 @@ namespace QuackOSD
             }
         }
 
+        private async Task OsdWindow_SeekRequested(double percentage)
+        {
+            _lastSeekbarPercentage = percentage;
+            if(_isDraggingSeekbar) return;
+            await SendSeekCommand(percentage);
+            ResetOsdTimer();
+        }
+
+        private async Task SendSeekCommand(double percentage)
+        {
+            if (_currentSession == null || _lastTimeline == null || _lastTimeline.EndTime == TimeSpan.Zero) return;
+            try
+            {
+                double totalSeconds = _lastTimeline.EndTime.TotalSeconds;
+                double targetSeconds = totalSeconds * percentage;
+                TimeSpan newPosition = TimeSpan.FromSeconds(targetSeconds);
+
+                bool success = await _currentSession.TryChangePlaybackPositionAsync(newPosition.Ticks);
+
+                if (success)
+                {
+                    _lastPosition = newPosition;
+                    _lastUpdateTime = DateTime.Now;
+                    UpdateProgressBarVisuals();
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("Errore durante il seek: " + ex.Message);
+            }
+        }
+
+        //pause timer when dragging
+        private void OsdWindow_DragStarted(object sender, EventArgs e)
+        {
+            _isDraggingSeekbar = true;
+            _osdHideTimer.Stop();
+            _progressTimer.Stop();
+        }
+
+        //start timer when drag ended
+        private void OsdWindow_DragEnded(object sender, EventArgs e)
+        {
+            _isDraggingSeekbar = false;
+            _ = SendSeekCommand(_lastSeekbarPercentage);
+            ResetOsdTimer();
+
+            if(_isPlaying) _progressTimer.Start();
+        }
+
         private async void OsdWindow_NextClicked(object sender, RoutedEventArgs e)
         {
             if (_currentSession != null)
@@ -247,8 +304,7 @@ namespace QuackOSD
             }
         }
 
-        // --- Logica "Spia" ---
-
+        // --- Media Spy Core ---
         private async Task StartMediaSpyAsync()
         {
             try
@@ -267,8 +323,6 @@ namespace QuackOSD
 
                 // Collega la sessione corrente
                 await TrySubscribeToCurrentSessionAsync();
-
-                Debug.WriteLine("MediaSpy avviato correttamente.");
             }
             catch (Exception ex)
             {
@@ -278,10 +332,10 @@ namespace QuackOSD
 
         private void SessionManager_CurrentSessionChanged(GlobalSystemMediaTransportControlsSessionManager sender, CurrentSessionChangedEventArgs args)
         {
-            Dispatcher.Invoke(() =>
+            _ = Dispatcher.InvokeAsync(async () =>
             {
                 Debug.WriteLine("=== Sessione Cambiata ===");
-                _ = TrySubscribeToCurrentSessionAsync();
+                await TrySubscribeToCurrentSessionAsync();
             });
         }
 
@@ -312,35 +366,52 @@ namespace QuackOSD
 
         private async void CurrentSession_MediaPropertiesChanged(GlobalSystemMediaTransportControlsSession sender, MediaPropertiesChangedEventArgs args)
         {
-            await Dispatcher.InvokeAsync(async () =>
+            try
             {
-                await UpdateOsdDataAsync(sender);
-                SyncTimeLine();
-            });
+                await Dispatcher.InvokeAsync(async () =>
+                {
+                    await UpdateOsdDataAsync(sender);
+                    SyncTimeLine();
+                });
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Errore MediaPropertiesChanged: {ex.Message}");
+            }
         }
 
         private async void CurrentSession_PlaybackInfoChanged(GlobalSystemMediaTransportControlsSession sender, PlaybackInfoChangedEventArgs args)
         {
-            await Dispatcher.InvokeAsync(() =>
+            try
             {
-                _lastPlaybackInfo = sender.GetPlaybackInfo();
-                if(_lastPlaybackInfo.PlaybackStatus != GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing)
+                await Dispatcher.InvokeAsync(async () =>
                 {
-                    _progressTimer.Stop();
-                }
-                else
-                {
-                    if (_osdWindow.Visibility == Visibility.Visible && Properties.Settings.Default.ShowTimeLine) _progressTimer.Start();
-                }
+                    _lastPlaybackInfo = sender.GetPlaybackInfo();
+                    if (_lastPlaybackInfo.PlaybackStatus != GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing)
+                        _progressTimer.Stop();
+                    else if (_osdWindow.Visibility == Visibility.Visible && Properties.Settings.Default.ShowTimeLine)
+                        _progressTimer.Start();
 
-                SyncTimeLine();
-                UpdateOsdDataAsync(sender);
-            });
+                    SyncTimeLine();
+                    await UpdateOsdDataAsync(sender);
+                });
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Errore PlaybackInfoChanged: {ex.Message}");
+            }
         }
 
         private async void CurrentSession_TimelinePropertiesChanged(GlobalSystemMediaTransportControlsSession sender, TimelinePropertiesChangedEventArgs args)
         {
-            await Dispatcher.InvokeAsync(() => SyncTimeLine());
+            try
+            {
+                await Dispatcher.InvokeAsync(() => SyncTimeLine());
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Errore TimelineChanged: {ex.Message}");
+            }
         }
 
         //method for "live preview"
@@ -372,7 +443,12 @@ namespace QuackOSD
 
             _osdWindow.MediaProgressBar.Minimum = timeline.StartTime.TotalSeconds;
             _osdWindow.MediaProgressBar.Maximum = timeline.EndTime.TotalSeconds;
-            _osdWindow.TotalTimeText.Text = timeline.EndTime.ToString(@"m\:ss");
+            string newTotalTime = timeline.EndTime.ToString(@"m\:ss");
+            if(_lastTotalTimeText != newTotalTime)
+            {
+                _osdWindow.TotalTimeText.Text = newTotalTime;
+                _lastTotalTimeText = newTotalTime;
+            }
 
             //if progress bar is not toggled then stop it
             if (Properties.Settings.Default.ShowTimeLine == false)
@@ -400,10 +476,18 @@ namespace QuackOSD
             if(currentPosition.TotalSeconds > _osdWindow.MediaProgressBar.Maximum) currentPosition = TimeSpan.FromSeconds(_osdWindow.MediaProgressBar.Maximum);
             
             _osdWindow.MediaProgressBar.Value = currentPosition.TotalSeconds;
-            _osdWindow.CurrentTimeText.Text = currentPosition.ToString(@"m\:ss");
+            string newTimeText = currentPosition.ToString(@"m\:ss");
+
+            if(_lastTimeText != newTimeText)
+            {
+                _osdWindow.CurrentTimeText.Text = newTimeText;
+                _lastTimeText = newTimeText;
+            }
+
+            _osdWindow.MediaProgressBar.Value = currentPosition.TotalSeconds;
         }
 
-        // --- Il "Core" OSD ---
+        // --- OSD core ---
         private async Task UpdateOsdDataAsync(GlobalSystemMediaTransportControlsSession session)
         {
             if (session == null) return;
@@ -415,7 +499,8 @@ namespace QuackOSD
             {
                 _osdWindow.TitleTextBlock.Text = mediaProperties.Title ?? "Sconosciuto";
                 _osdWindow.ArtistTextBlock.Text = mediaProperties.Artist ?? "";
-                await LoadThumbnailAsync(mediaProperties.Thumbnail);
+                //skip loading thumbnail if disabled
+                if (Properties.Settings.Default.ShowCover) await LoadThumbnailAsync(mediaProperties.Thumbnail);
             }
 
             switch (playbackInfo.PlaybackStatus)
@@ -434,7 +519,7 @@ namespace QuackOSD
             ShowAndResetOsd();
         }
 
-        // Metodo per convertire la copertina
+        //load album art
         private async Task LoadThumbnailAsync(IRandomAccessStreamReference thumbnailReference)
         {
             if (thumbnailReference != null)

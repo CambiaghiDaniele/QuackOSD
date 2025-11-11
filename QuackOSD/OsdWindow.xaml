@@ -92,7 +92,7 @@
                 <Button x:Name="NextButton" Content="⏩" Margin="10,0" Click="NextButton_Click" />
             </StackPanel>
 
-            <Grid Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2" Margin="0,15,0,5" x:Name="ProgressGrid">
+            <Grid Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2" Margin="0,15,0,5" x:Name="ProgressGrid" Background="Transparent" PreviewMouseLeftButtonDown="ProgressGrid_PreviewMouseLeftButtonDown" PreviewMouseLeftButtonUp="ProgressGrid_PreviewMouseLeftButtonUp" MouseMove="ProgressGrid_MouseMove">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>

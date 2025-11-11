@@ -1,27 +1,29 @@
-﻿using System;
-using System.Windows;
+﻿using System.Windows;
 using System.Windows.Media.Animation;
 
 namespace QuackOSD
 {
     public partial class OsdWindow : Window
     {
-        // Eventi per comunicare con l'esterno
         public event RoutedEventHandler PrevClicked;
         public event RoutedEventHandler PlayPauseClicked;
         public event RoutedEventHandler NextClicked;
-        public event EventHandler AnimationCompleted; // Nuovo: avvisa quando l'uscita è finita
+        public event EventHandler AnimationCompleted;
+        public event Action<double> SeekRequested;
+        public event EventHandler DragStarted;
+        public event EventHandler DragEnded;
+
+        //used to track dragging state on ProgressBar
+        private bool _isDragging = false;
 
         public OsdWindow()
         {
             InitializeComponent();
         }
 
-        // --- Metodi Pubblici (Comandi che MainWindow può darmi) ---
-
         public void UpdateAppearance()
         {
-            // 1. Zoom
+            //zoom
             double scale = Properties.Settings.Default.OsdScale;
             if (OsdScaleTransform != null)
             {
@@ -29,18 +31,18 @@ namespace QuackOSD
                 OsdScaleTransform.ScaleY = scale;
             }
 
-            // 2. Toggle Elementi
+            //element visibility
             AlbumArtImage.Visibility = Properties.Settings.Default.ShowCover ? Visibility.Visible : Visibility.Collapsed;
             TitleTextBlock.Visibility = Properties.Settings.Default.ShowTitle ? Visibility.Visible : Visibility.Collapsed;
             ArtistTextBlock.Visibility = Properties.Settings.Default.ShowArtist ? Visibility.Visible : Visibility.Collapsed;
             ControlsPanel.Visibility = Properties.Settings.Default.ShowControls ? Visibility.Visible : Visibility.Collapsed;
             ProgressGrid.Visibility = Properties.Settings.Default.ShowTimeLine ? Visibility.Visible : Visibility.Collapsed;
 
-            // 3. Gestione colonna copertina
+            //cover art column width
             if (Properties.Settings.Default.ShowCover) MainGrid.ColumnDefinitions[0].Width = new GridLength(80);
             else MainGrid.ColumnDefinitions[0].Width = new GridLength(0);
 
-            // Forza ricalcolo layout immediato
+            //force layout update
             this.UpdateLayout();
         }
 
@@ -87,14 +89,14 @@ namespace QuackOSD
             int durationMs = Properties.Settings.Default.AnimInDuration;
             var duration = TimeSpan.FromMilliseconds(durationMs);
 
-            // Reset pre-animazione
+            //animation reset
             this.BeginAnimation(Window.OpacityProperty, null);
             this.BeginAnimation(Window.TopProperty, null);
             this.BeginAnimation(Window.LeftProperty, null);
             this.Opacity = 0;
             this.Visibility = Visibility.Visible;
 
-            // Calcola posizione finale corretta
+            //calculate final position
             UpdatePosition();
             double finalTop = this.Top;
             double finalLeft = this.Left;
@@ -166,8 +168,55 @@ namespace QuackOSD
             }
         }
 
-        // --- Metodi Privati (Helper interni) ---
+        // progress bar dragging handlers
+        private void ProgressGrid_PreviewMouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        {
+            _isDragging = true;
+            DragStarted?.Invoke(this, EventArgs.Empty);
+            ProgressGrid.CaptureMouse();
 
+            UpdateSeekPosition(e);
+            e.Handled = true;
+        }
+
+        private void ProgressGrid_MouseMove(object sender, System.Windows.Input.MouseEventArgs e)
+        {
+            if (_isDragging)
+            {
+                UpdateSeekPosition(e);
+            }
+        }
+
+        private void ProgressGrid_PreviewMouseLeftButtonUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
+        {
+            _isDragging = false;
+            DragEnded?.Invoke(this, EventArgs.Empty);
+            ProgressGrid.ReleaseMouseCapture();
+            e.Handled = true;
+        }
+
+        private void UpdateSeekPosition(System.Windows.Input.MouseEventArgs e)
+        {
+            System.Windows.Point clickPosition = e.GetPosition(MediaProgressBar);
+            double barWidth = MediaProgressBar.ActualWidth;
+
+            if(barWidth == 0) return;
+
+            double percentage = clickPosition.X / barWidth;
+            if(percentage < 0) percentage = 0;
+            if(percentage > 1) percentage = 1;
+
+            SeekRequested?.Invoke(percentage);
+
+            if(MediaProgressBar.Maximum > 0)
+            {
+                double targetSeconds = MediaProgressBar.Maximum * percentage;
+                MediaProgressBar.Value = targetSeconds;
+                CurrentTimeText.Text = TimeSpan.FromSeconds(targetSeconds).ToString(@"m\:ss");
+            }
+        }
+
+        //calculate off-screen position for slide animations
         private double CalculateOffScreen(bool isHorizontal)
         {
             string pos = Properties.Settings.Default.OsdPosition;
@@ -186,7 +235,7 @@ namespace QuackOSD
             }
         }
 
-        // --- Gestori Eventi UI ---
+        //ui button handlers
         private void PrevButton_Click(object sender, RoutedEventArgs e) => PrevClicked?.Invoke(this, e);
         private void PlayPauseButton_Click(object sender, RoutedEventArgs e) => PlayPauseClicked?.Invoke(this, e);
         private void NextButton_Click(object sender, RoutedEventArgs e) => NextClicked?.Invoke(this, e);
