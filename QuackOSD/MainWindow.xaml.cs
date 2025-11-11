@@ -1,4 +1,5 @@
-﻿using System.Diagnostics;
+﻿using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
@@ -14,6 +15,8 @@ namespace QuackOSD
     {
         private GlobalSystemMediaTransportControlsSessionManager _sessionManager;
         private GlobalSystemMediaTransportControlsSession _currentSession;
+        private GlobalSystemMediaTransportControlsSessionPlaybackInfo _lastPlaybackInfo;
+        private GlobalSystemMediaTransportControlsSessionTimelineProperties _lastTimeline;
 
         private OsdWindow _osdWindow;
         private SettingsWindow _settingsWindow;
@@ -94,15 +97,15 @@ namespace QuackOSD
             };
 
             //configure progress bar update timer
-            _progressTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
+            _progressTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
             _progressTimer.Tick += (s, e) => UpdateProgressBarVisuals();
 
-            // Iscrizione eventi pulsanti OSD
+            //button event handlers
             _osdWindow.PrevClicked += OsdWindow_PrevClicked;
             _osdWindow.PlayPauseClicked += OsdWindow_PlayPauseClicked;
             _osdWindow.NextClicked += OsdWindow_NextClicked;
 
-            // --- Setup dell'Icona nella System Tray ---
+            //setup icon in system tray
             InitializeTrayIcon();
 
             _osdWindow.UpdateAppearance();
@@ -157,7 +160,7 @@ namespace QuackOSD
         {
             // Rimuove l'icona dalla tray quando l'app si chiude
             // Se non facessimo questo, l'icona "fantasma" rimarrebbe fino al riavvio
-            _notifyIcon?.Dispose();
+            if(_notifyIcon != null) _notifyIcon?.Dispose();
 
             //close all windows
             _osdWindow?.Close();
@@ -309,9 +312,9 @@ namespace QuackOSD
 
         private async void CurrentSession_MediaPropertiesChanged(GlobalSystemMediaTransportControlsSession sender, MediaPropertiesChangedEventArgs args)
         {
-            await Dispatcher.InvokeAsync(() =>
+            await Dispatcher.InvokeAsync(async () =>
             {
-                UpdateOsdDataAsync(sender);
+                await UpdateOsdDataAsync(sender);
                 SyncTimeLine();
             });
         }
@@ -320,8 +323,8 @@ namespace QuackOSD
         {
             await Dispatcher.InvokeAsync(() =>
             {
-                var playbackInfo = sender.GetPlaybackInfo();
-                if(playbackInfo.PlaybackStatus != GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing)
+                _lastPlaybackInfo = sender.GetPlaybackInfo();
+                if(_lastPlaybackInfo.PlaybackStatus != GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing)
                 {
                     _progressTimer.Stop();
                 }
@@ -356,8 +359,11 @@ namespace QuackOSD
             if (_currentSession == null) return;
 
             var timeline = _currentSession.GetTimelineProperties();
-            var playbackInfo = _currentSession.GetPlaybackInfo();
+            var playbackInfo = _lastPlaybackInfo ?? _currentSession.GetPlaybackInfo();
+            
             if(timeline == null) return;
+
+            _lastTimeline = timeline;
 
             _lastPosition = timeline.Position;
             _lastUpdateTime = DateTime.Now;
@@ -381,6 +387,7 @@ namespace QuackOSD
         private void UpdateProgressBarVisuals()
         {
             if (_osdWindow.Visibility != Visibility.Visible) return;
+            if (_lastTimeline == null) return;
 
             TimeSpan currentPosition = _lastPosition;
 
@@ -402,7 +409,7 @@ namespace QuackOSD
             if (session == null) return;
 
             var mediaProperties = await session.TryGetMediaPropertiesAsync();
-            var playbackInfo = session.GetPlaybackInfo();
+            var playbackInfo = _lastPlaybackInfo ?? session.GetPlaybackInfo();
 
             if (mediaProperties != null)
             {

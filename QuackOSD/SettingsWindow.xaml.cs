@@ -1,5 +1,5 @@
 ﻿using System;
-using System.ComponentModel; // Serve per intercettare la chiusura
+using System.ComponentModel;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
@@ -37,7 +37,7 @@ namespace QuackOSD
             MarginHBox.Text = Properties.Settings.Default.MarginHorizontal.ToString();
             MarginVBox.Text = Properties.Settings.Default.MarginVertical.ToString();
 
-            //timer until osd start out animation
+            //timer until osd starts out animation
             DurationBox.Text = (Properties.Settings.Default.OsdDuration / 1000).ToString();
 
             //in animation
@@ -85,7 +85,7 @@ namespace QuackOSD
             if (!_isLoaded) return;
 
             if (int.TryParse(MarginHBox.Text, out int h)) Properties.Settings.Default.MarginHorizontal = h;
-            else Properties.Settings.Default.MarginVertical = 0;
+            else Properties.Settings.Default.MarginHorizontal = 0;
 
             if (int.TryParse(MarginVBox.Text, out int v)) Properties.Settings.Default.MarginVertical = v;
             else Properties.Settings.Default.MarginVertical = 0;
@@ -192,11 +192,11 @@ namespace QuackOSD
             if(!regex.IsMatch(futureText)) e.Handled = true;
         }
 
-        // Quando l'utente clicca "X" o "Chiudi", nascondiamo invece di chiudere
+        //cancel the closing of the window, just hide it
         protected override void OnClosing(CancelEventArgs e)
         {
-            e.Cancel = true;  // Annulla la vera chiusura
-            this.Hide();      // Nasconde solo la finestra
+            e.Cancel = true;
+            this.Hide();
         }
 
         private void CloseButton_Click(object sender, RoutedEventArgs e)
