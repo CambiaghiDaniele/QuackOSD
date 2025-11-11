@@ -1,4 +1,4 @@
-#🦆 QuackOSD
+# 🦆 QuackOSD
 
 QuackOSD is a lightweight, customizable On-Screen Display (OSD) for Windows that shows the currently playing media — including title, artist, album art, and playback progress — using the Windows Global System Media Transport Controls (GSMTC) API.
 
@@ -10,7 +10,7 @@ It integrates seamlessly with applications such as Spotify, YouTube (in browsers
 
 ⏯️ Playback control buttons: previous, play/pause, next
 
-📊 Dynamic progress bar with playback prediction
+📊 Dynamic progress bar with playback prediction - supports dragging to seek
 
 🪟 Animated OSD window: fade or slide transitions
 
