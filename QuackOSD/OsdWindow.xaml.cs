@@ -130,6 +130,13 @@ namespace QuackOSD
 
         public void AnimateOut()
         {
+            //don't animate out if always-on is enabled
+            if (Properties.Settings.Default.IsAlwaysOn)
+            {
+                AnimationCompleted?.Invoke(this, EventArgs.Empty);
+                return;
+            }
+
             string animType = Properties.Settings.Default.AnimOutType;
             int durationMs = Properties.Settings.Default.AnimOutDuration;
             var duration = TimeSpan.FromMilliseconds(durationMs);

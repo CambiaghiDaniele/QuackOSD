@@ -59,9 +59,18 @@ namespace QuackOSD
             ScaleSlider.Value = Properties.Settings.Default.OsdScale;
             ScaleValueText.Text = $"{(int)(ScaleSlider.Value * 100)}";
 
+            //OSD behavior
+            ShowOnSongChangeCheck.IsChecked = Properties.Settings.Default.ShowOnSongChange;
+            IsAlwaysOnCheck.IsChecked = Properties.Settings.Default.IsAlwaysOn;
+
+            ShowOnSongChangeCheck.IsEnabled = !(IsAlwaysOnCheck.IsChecked == true);
+
             _isLoaded = true;
         }
 
+        // --- General Tab ---
+
+        //position radio buttons
         private void PositionRadio_Checked(Object sender, RoutedEventArgs e)
         {
             if (!_isLoaded) return;
@@ -79,7 +88,7 @@ namespace QuackOSD
 
             SettingsChanged?.Invoke(this, EventArgs.Empty);
         }
-
+        //margin textboxes
         private void MarginBox_TextChanged(object sender, TextChangedEventArgs e)
         {
             if (!_isLoaded) return;
@@ -103,6 +112,23 @@ namespace QuackOSD
         {
             MarginVBox.Text = "10";
         }
+
+        //OSD behavior checkboxes
+        private void BehaviorCheck_Changed(object sender, RoutedEventArgs e)
+        {
+            if (!_isLoaded) return;
+            Properties.Settings.Default.ShowOnSongChange = ShowOnSongChangeCheck.IsChecked == true;
+            Properties.Settings.Default.IsAlwaysOn = IsAlwaysOnCheck.IsChecked == true;
+            Properties.Settings.Default.Save();
+
+            if(ShowOnSongChangeCheck != null)
+            {
+                ShowOnSongChangeCheck.IsEnabled = !(IsAlwaysOnCheck.IsChecked == true);
+            }
+            SettingsChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        // --- Animation Tab ---
 
         //helper to select combo
         private void SelectComboItem(System.Windows.Controls.ComboBox combo, string value)
@@ -155,6 +181,8 @@ namespace QuackOSD
             Properties.Settings.Default.Save();
         }
 
+        // --- Contents Tab ---
+
         //toggle elements
         private void ContentCheck_Changed(object sender, RoutedEventArgs e)
         {
@@ -191,6 +219,8 @@ namespace QuackOSD
 
             if(!regex.IsMatch(futureText)) e.Handled = true;
         }
+
+        // --- aspect WIP ---
 
         //cancel the closing of the window, just hide it
         protected override void OnClosing(CancelEventArgs e)

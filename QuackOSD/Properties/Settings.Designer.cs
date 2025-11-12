@@ -190,5 +190,29 @@ namespace QuackOSD.Properties {
                 this["ShowTimeLine"] = value;
             }
         }
+        
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("False")]
+        public bool ShowOnSongChange {
+            get {
+                return ((bool)(this["ShowOnSongChange"]));
+            }
+            set {
+                this["ShowOnSongChange"] = value;
+            }
+        }
+        
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("False")]
+        public bool IsAlwaysOn {
+            get {
+                return ((bool)(this["IsAlwaysOn"]));
+            }
+            set {
+                this["IsAlwaysOn"] = value;
+            }
+        }
     }
 }

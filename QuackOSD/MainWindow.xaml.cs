@@ -5,6 +5,7 @@ using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using Windows.Media.Control;
 using Windows.Storage.Streams;
+using System.Runtime.InteropServices;
 
 namespace QuackOSD
 {
@@ -35,9 +36,46 @@ namespace QuackOSD
         private string _lastTimeText = "";
         private string _lastTotalTimeText = "";
 
+        //control when to show osd
+        private bool showOsd = false;
+
+        //keyboard hook constants
+        private const int WH_KEYBOARD_LL = 13;
+        private const int WM_KEYDOWN = 0x0100;
+        //media key virtual key codes
+        private const int VK_MEDIA_PLAY_PAUSE = 0xB3;
+        private const int VK_MEDIA_NEXT_TRACK = 0xB0;
+        private const int VK_MEDIA_PREV_TRACK = 0xB1;
+        private const int VK_MEDIA_STOP = 0xB2;
+        //keyboard hook variables
+        private static LowLevelKeyboardProc _proc;
+        private static IntPtr _hookID = IntPtr.Zero;
+        //to prevent multiple osd on multiple keypresses
+        private DateTime _lastMediaKeyPress = DateTime.MinValue;
+        //keyboard hook methods
+        private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
+        //set hook
+        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
+        //remove hook
+        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool UnhookWindowsHookEx(IntPtr hhk);
+        //call next hook
+        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+        //get module handle
+        [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        private static extern IntPtr GetModuleHandle(string lpModuleName);
+
+        //constructor
         public MainWindow(OsdWindow osd, SettingsWindow settings)
         {
             InitializeComponent();
+
+            //set keyboard hook
+            _proc = HookCallback;
+            _hookID = SetHook(_proc);
 
             _osdWindow = osd;
             _settingsWindow = settings;
@@ -156,18 +194,50 @@ namespace QuackOSD
             }
         }
 
+        //keyboard hook callback
+        private IntPtr SetHook(LowLevelKeyboardProc proc)
+        {
+            using (var curProcess = Process.GetCurrentProcess())
+            using (var curModule = curProcess.MainModule)
+            {
+                return SetWindowsHookEx(WH_KEYBOARD_LL, proc, GetModuleHandle(curModule.ModuleName), 0);
+            }
+        }
+
         //clean up on exit
         private void OnApplicationExit(object sender, ExitEventArgs e)
         {
-            // Rimuove l'icona dalla tray quando l'app si chiude
-            // Se non facessimo questo, l'icona "fantasma" rimarrebbe fino al riavvio
-            if(_notifyIcon != null) _notifyIcon?.Dispose();
+            //unhook keyboard hook
+            if (_hookID != IntPtr.Zero) UnhookWindowsHookEx(_hookID);
+
+            //remove tray icon
+            if (_notifyIcon != null) _notifyIcon?.Dispose();
 
             //close all windows
             _osdWindow?.Close();
             _settingsWindow?.Close();
         }
 
+        private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
+        {
+            if (nCode >= 0 && wParam == (IntPtr)WM_KEYDOWN)
+            {
+                int vkCode = Marshal.ReadInt32(lParam);
+                //check for media keys
+                if (vkCode == VK_MEDIA_PLAY_PAUSE || vkCode == VK_MEDIA_NEXT_TRACK || vkCode == VK_MEDIA_PREV_TRACK || vkCode == VK_MEDIA_STOP)
+                {
+                    DateTime now = DateTime.Now;
+                    /*prevent multiple osd on multiple keypresses within 100ms
+                    if ((now - _lastMediaKeyPress).TotalMilliseconds > 500)
+                    {
+                        _lastMediaKeyPress = now;
+                        ShowAndResetOsd();
+                    }*/
+                    _lastMediaKeyPress = now;
+                }
+            }
+            return CallNextHookEx(_hookID, nCode, wParam, lParam);
+        }
 
         //open settings windows
         private void OpenSettings()
@@ -201,6 +271,13 @@ namespace QuackOSD
         {
             _isPreviewMode = false;
 
+            if(Properties.Settings.Default.IsAlwaysOn)
+            {
+                _osdWindow.Visibility = Visibility.Visible;
+                ResetOsdTimer();
+                return;
+            }
+
             if (_currentSession != null)
             {
                 var playbackInfo = _currentSession.GetPlaybackInfo();
@@ -224,7 +301,7 @@ namespace QuackOSD
             if (_currentSession != null)
             {
                 await _currentSession.TrySkipPreviousAsync();
-                ResetOsdTimer();
+                ShowAndResetOsd();
             }
         }
 
@@ -241,7 +318,15 @@ namespace QuackOSD
                 {
                     await _currentSession.TryPlayAsync();
                 }
-                ResetOsdTimer();
+                ShowAndResetOsd();
+            }
+        }
+        private async void OsdWindow_NextClicked(object sender, RoutedEventArgs e)
+        {
+            if (_currentSession != null)
+            {
+                await _currentSession.TrySkipNextAsync();
+                ShowAndResetOsd();
             }
         }
 
@@ -293,15 +378,6 @@ namespace QuackOSD
             ResetOsdTimer();
 
             if(_isPlaying) _progressTimer.Start();
-        }
-
-        private async void OsdWindow_NextClicked(object sender, RoutedEventArgs e)
-        {
-            if (_currentSession != null)
-            {
-                await _currentSession.TrySkipNextAsync();
-                ResetOsdTimer();
-            }
         }
 
         // --- Media Spy Core ---
@@ -370,8 +446,12 @@ namespace QuackOSD
             {
                 await Dispatcher.InvokeAsync(async () =>
                 {
-                    await UpdateOsdDataAsync(sender);
-                    SyncTimeLine();
+                    //if user pressed media key in last 500ms show osd
+                    bool userIntervened = (DateTime.Now - _lastMediaKeyPress).TotalMilliseconds < 500;
+                    //show osd on song change if enabled
+                    bool shouldShow = userIntervened || Properties.Settings.Default.ShowOnSongChange || Properties.Settings.Default.IsAlwaysOn;
+
+                    await UpdateOsdDataAsync(sender, showOsd: shouldShow);
                 });
             }
             catch (Exception ex)
@@ -386,14 +466,25 @@ namespace QuackOSD
             {
                 await Dispatcher.InvokeAsync(async () =>
                 {
-                    _lastPlaybackInfo = sender.GetPlaybackInfo();
-                    if (_lastPlaybackInfo.PlaybackStatus != GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing)
+                    var newPlaybackInfo = sender.GetPlaybackInfo();
+                    if (newPlaybackInfo == null) return;
+
+                    if (newPlaybackInfo.PlaybackStatus != GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing)
                         _progressTimer.Stop();
                     else if (_osdWindow.Visibility == Visibility.Visible && Properties.Settings.Default.ShowTimeLine)
                         _progressTimer.Start();
 
                     SyncTimeLine();
-                    await UpdateOsdDataAsync(sender);
+                    //if user pressed media key in last 500ms show osd
+                    bool userIntervened = (DateTime.Now - _lastMediaKeyPress).TotalMilliseconds < 500;
+                    //show osd on playback state change
+                    bool stateChanged = _lastPlaybackInfo != null && _lastPlaybackInfo.PlaybackStatus != newPlaybackInfo.PlaybackStatus;
+                    //decide if show osd
+                    bool shouldShow = userIntervened || stateChanged || Properties.Settings.Default.IsAlwaysOn;
+
+                    await UpdateOsdDataAsync(sender, showOsd: shouldShow);
+
+                    _lastPlaybackInfo = newPlaybackInfo;
                 });
             }
             catch (Exception ex)
@@ -430,7 +521,7 @@ namespace QuackOSD
             if (_currentSession == null) return;
 
             var timeline = _currentSession.GetTimelineProperties();
-            var playbackInfo = _lastPlaybackInfo ?? _currentSession.GetPlaybackInfo();
+            _lastPlaybackInfo = _currentSession.GetPlaybackInfo();
             
             if(timeline == null) return;
 
@@ -438,8 +529,8 @@ namespace QuackOSD
 
             _lastPosition = timeline.Position;
             _lastUpdateTime = DateTime.Now;
-            _playbackRate = playbackInfo.PlaybackRate ?? 1.0;
-            _isPlaying = playbackInfo.PlaybackStatus == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing;
+            _playbackRate = _lastPlaybackInfo.PlaybackRate ?? 1.0;
+            _isPlaying = _lastPlaybackInfo.PlaybackStatus == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing;
 
             _osdWindow.MediaProgressBar.Minimum = timeline.StartTime.TotalSeconds;
             _osdWindow.MediaProgressBar.Maximum = timeline.EndTime.TotalSeconds;
@@ -488,12 +579,12 @@ namespace QuackOSD
         }
 
         // --- OSD core ---
-        private async Task UpdateOsdDataAsync(GlobalSystemMediaTransportControlsSession session)
+        private async Task UpdateOsdDataAsync(GlobalSystemMediaTransportControlsSession session, bool showOsd = true)
         {
             if (session == null) return;
 
             var mediaProperties = await session.TryGetMediaPropertiesAsync();
-            var playbackInfo = _lastPlaybackInfo ?? session.GetPlaybackInfo();
+            _lastPlaybackInfo = session.GetPlaybackInfo();
 
             if (mediaProperties != null)
             {
@@ -503,7 +594,7 @@ namespace QuackOSD
                 if (Properties.Settings.Default.ShowCover) await LoadThumbnailAsync(mediaProperties.Thumbnail);
             }
 
-            switch (playbackInfo.PlaybackStatus)
+            switch (_lastPlaybackInfo.PlaybackStatus)
             {
                 case GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing:
                     _osdWindow.PlayPauseButton.Content = "⏸️";
@@ -516,7 +607,10 @@ namespace QuackOSD
             }
 
             SyncTimeLine();
-            ShowAndResetOsd();
+            if (showOsd)
+            {
+                ShowAndResetOsd();
+            }
         }
 
         //load album art
@@ -566,7 +660,9 @@ namespace QuackOSD
         {
             _osdHideTimer.Stop();
 
-            if(!_isPreviewMode)
+            if(Properties.Settings.Default.IsAlwaysOn) return;
+
+            if (!_isPreviewMode)
             {
                 int durationMs = Properties.Settings.Default.OsdDuration;
                 _osdHideTimer.Interval = TimeSpan.FromMilliseconds(durationMs);
