@@ -1,5 +1,7 @@
 ﻿using System.Windows;
 using System.Windows.Media.Animation;
+using System.Runtime.InteropServices;
+using System.Windows.Interop;
 
 namespace QuackOSD
 {
@@ -16,9 +18,22 @@ namespace QuackOSD
         //used to track dragging state on ProgressBar
         private bool _isDragging = false;
 
+        // WinAPI constants and functions for click-through
+        private IntPtr _hwnd;
+        private const int GWL_EXSTYLE = -20;
+        private const int WS_EX_TRANSPARENT = 0x20;
+
+        [DllImport("user32.dll")]
+        private static extern int GetWindowLong(IntPtr hwnd, int index);
+
+        [DllImport("user32.dll")]
+        private static extern int SetWindowLong(IntPtr hwnd, int index, int newStyle);
+
         public OsdWindow()
         {
             InitializeComponent();
+
+            this.SourceInitialized += (s, e) => { _hwnd = new WindowInteropHelper(this).Handle; };
         }
 
         public void UpdateAppearance()
@@ -32,7 +47,9 @@ namespace QuackOSD
             }
 
             //click-through
-            this.IsHitTestVisible = !Properties.Settings.Default.IsClickThrough;
+            bool isClickThrough = Properties.Settings.Default.IsClickThrough;
+            this.IsHitTestVisible = !isClickThrough;
+            SetClickThrough(isClickThrough);
 
             //element visibility
             AlbumArtImage.Visibility = Properties.Settings.Default.ShowCover ? Visibility.Visible : Visibility.Collapsed;
@@ -176,6 +193,15 @@ namespace QuackOSD
                     onComplete(null, null);
                     break;
             }
+        }
+
+        public void SetClickThrough(bool enabled)
+        {
+            if (_hwnd == IntPtr.Zero) return;
+
+            int extendedStyle = GetWindowLong(_hwnd, GWL_EXSTYLE);
+            if (enabled) SetWindowLong(_hwnd, GWL_EXSTYLE, extendedStyle | WS_EX_TRANSPARENT);
+            else SetWindowLong(_hwnd, GWL_EXSTYLE, extendedStyle & ~WS_EX_TRANSPARENT);
         }
 
         // progress bar dragging handlers

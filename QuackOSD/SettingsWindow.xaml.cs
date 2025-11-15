@@ -34,40 +34,42 @@ namespace QuackOSD
                 case "TopLeft": default: TopLeftRadio.IsChecked = true; break;
             }
 
+            //general - margin
             MarginHBox.Text = Properties.Settings.Default.MarginHorizontal.ToString();
             MarginVBox.Text = Properties.Settings.Default.MarginVertical.ToString();
 
-            //timer until osd starts out animation
-            DurationBox.Text = (Properties.Settings.Default.OsdDuration / 1000).ToString();
+            //general - behavior
+            IsAlwaysOnCheck.IsChecked = Properties.Settings.Default.IsAlwaysOn;
+            ShowOnSongChangeCheck.IsChecked = Properties.Settings.Default.ShowOnSongChange;
+            IsClickThroughCheck.IsChecked = Properties.Settings.Default.IsClickThrough;
+            StartOnBootCheck.IsChecked = Properties.Settings.Default.StartOnBoot;
 
-            //in animation
-            SelectComboItem(AnimInCombo, Properties.Settings.Default.AnimInType);
-            AnimInDurationBox.Text = Properties.Settings.Default.AnimInDuration.ToString();
-
-            //out animation
-            SelectComboItem(AnimOutCombo, Properties.Settings.Default.AnimOutType);
-            AnimOutDurationBox.Text = Properties.Settings.Default.AnimOutDuration.ToString();
-
-            //toggle elements 
+            //contents - toggles
             ShowCoverCheck.IsChecked = Properties.Settings.Default.ShowCover;
             ShowTitletCheck.IsChecked = Properties.Settings.Default.ShowTitle;
             ShowArtistCheck.IsChecked = Properties.Settings.Default.ShowArtist;
             ShowControlsCheck.IsChecked = Properties.Settings.Default.ShowControls;
             ShowTimeLineCheck.IsChecked = Properties.Settings.Default.ShowTimeLine;
 
-            //window size
+            //contents - zoom
             ScaleSlider.Value = Properties.Settings.Default.OsdScale;
             ScaleValueText.Text = $"{(int)(ScaleSlider.Value * 100)}";
 
-            //OSD behavior
-            ShowOnSongChangeCheck.IsChecked = Properties.Settings.Default.ShowOnSongChange;
-            IsAlwaysOnCheck.IsChecked = Properties.Settings.Default.IsAlwaysOn;
-            IsClickThroughCheck.IsChecked = Properties.Settings.Default.IsClickThrough;
+            //animation - timer
+            DurationBox.Text = (Properties.Settings.Default.OsdDuration / 1000).ToString();
 
-            ShowOnSongChangeCheck.IsEnabled = !(IsAlwaysOnCheck.IsChecked == true);
-            IsClickThroughCheck.IsEnabled = !(IsAlwaysOnCheck.IsChecked == true);
+            //animation - in animation
+            SelectComboItem(AnimInCombo, Properties.Settings.Default.AnimInType);
+            AnimInDurationBox.Text = Properties.Settings.Default.AnimInDuration.ToString();
 
-            StartOnBootCheck.IsChecked = Properties.Settings.Default.StartOnBoot;
+            //animation - out animation
+            SelectComboItem(AnimOutCombo, Properties.Settings.Default.AnimOutType);
+            AnimOutDurationBox.Text = Properties.Settings.Default.AnimOutDuration.ToString();
+
+            //behavior checkboxes state
+            bool alwaysOn = IsAlwaysOnCheck.IsChecked == true;
+            ShowOnSongChangeCheck.IsEnabled = !alwaysOn;
+            IsClickThroughCheck.IsEnabled = alwaysOn;
 
             _isLoaded = true;
         }
