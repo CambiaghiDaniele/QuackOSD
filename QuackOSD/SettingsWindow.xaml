@@ -61,10 +61,20 @@
                                           Margin="0,0,0,10"
                                           Checked="BehaviorCheck_Changed"
                                           Unchecked="BehaviorCheck_Changed"/>
-                                <CheckBox x:Name="ShowOnSongChangeCheck"
-                                          Content="Show on song change"
+                                <CheckBox x:Name="IsClickThroughCheck"
+                                          Content="disable clicks (Click-Through)"
+                                          Margin="0,0,0,10"
                                           Checked="BehaviorCheck_Changed"
                                           Unchecked="BehaviorCheck_Changed"/>
+                                <CheckBox x:Name="ShowOnSongChangeCheck"
+                                          Content="Show on song change"
+                                          Margin="0,0,0,10"
+                                          Checked="BehaviorCheck_Changed"
+                                          Unchecked="BehaviorCheck_Changed"/>
+                                <CheckBox x:Name="StartOnBootCheck"
+                                          Content="Start on windows startup"
+                                          Checked="StartOnBootCheck_Changed"
+                                          Unchecked="StartOnBootCheck_Changed"/>
                             </StackPanel>
                         </GroupBox>
                     </StackPanel>

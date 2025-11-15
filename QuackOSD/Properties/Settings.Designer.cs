@@ -214,5 +214,29 @@ namespace QuackOSD.Properties {
                 this["IsAlwaysOn"] = value;
             }
         }
+        
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("False")]
+        public bool StartOnBoot {
+            get {
+                return ((bool)(this["StartOnBoot"]));
+            }
+            set {
+                this["StartOnBoot"] = value;
+            }
+        }
+        
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("False")]
+        public bool IsClickThrough {
+            get {
+                return ((bool)(this["IsClickThrough"]));
+            }
+            set {
+                this["IsClickThrough"] = value;
+            }
+        }
     }
 }

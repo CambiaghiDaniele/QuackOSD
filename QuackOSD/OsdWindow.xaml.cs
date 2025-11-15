@@ -31,6 +31,9 @@ namespace QuackOSD
                 OsdScaleTransform.ScaleY = scale;
             }
 
+            //click-through
+            this.IsHitTestVisible = !Properties.Settings.Default.IsClickThrough;
+
             //element visibility
             AlbumArtImage.Visibility = Properties.Settings.Default.ShowCover ? Visibility.Visible : Visibility.Collapsed;
             TitleTextBlock.Visibility = Properties.Settings.Default.ShowTitle ? Visibility.Visible : Visibility.Collapsed;

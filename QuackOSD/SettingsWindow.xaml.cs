@@ -3,8 +3,8 @@ using System.ComponentModel;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
-using Windows.Data.Xml.Dom;
-using Windows.UI.Notifications;
+using Microsoft.Win32;
+using System.Reflection;
 
 namespace QuackOSD
 {
@@ -62,8 +62,12 @@ namespace QuackOSD
             //OSD behavior
             ShowOnSongChangeCheck.IsChecked = Properties.Settings.Default.ShowOnSongChange;
             IsAlwaysOnCheck.IsChecked = Properties.Settings.Default.IsAlwaysOn;
+            IsClickThroughCheck.IsChecked = Properties.Settings.Default.IsClickThrough;
 
             ShowOnSongChangeCheck.IsEnabled = !(IsAlwaysOnCheck.IsChecked == true);
+            IsClickThroughCheck.IsEnabled = !(IsAlwaysOnCheck.IsChecked == true);
+
+            StartOnBootCheck.IsChecked = Properties.Settings.Default.StartOnBoot;
 
             _isLoaded = true;
         }
@@ -117,15 +121,53 @@ namespace QuackOSD
         private void BehaviorCheck_Changed(object sender, RoutedEventArgs e)
         {
             if (!_isLoaded) return;
+
+            bool isAlwaysOn = IsAlwaysOnCheck.IsChecked == true;
+            bool isClickThrough = IsClickThroughCheck.IsChecked == true;
+
+            if(!isAlwaysOn)
+            {
+                isClickThrough = false;
+                IsClickThroughCheck.IsChecked = false;
+            }
+
             Properties.Settings.Default.ShowOnSongChange = ShowOnSongChangeCheck.IsChecked == true;
-            Properties.Settings.Default.IsAlwaysOn = IsAlwaysOnCheck.IsChecked == true;
+            Properties.Settings.Default.IsAlwaysOn = isAlwaysOn;
+            Properties.Settings.Default.IsClickThrough = isClickThrough;
             Properties.Settings.Default.Save();
 
-            if(ShowOnSongChangeCheck != null)
-            {
-                ShowOnSongChangeCheck.IsEnabled = !(IsAlwaysOnCheck.IsChecked == true);
-            }
+            ShowOnSongChangeCheck.IsEnabled = !isAlwaysOn;
+            IsClickThroughCheck.IsEnabled = isAlwaysOn;
             SettingsChanged?.Invoke(this, EventArgs.Empty);
+        }
+        //start on boot checkbox
+        private void StartOnBootCheck_Changed(object sender, RoutedEventArgs e)
+        {
+            if (!_isLoaded) return;
+            bool enabled = StartOnBootCheck.IsChecked == true;
+            Properties.Settings.Default.StartOnBoot = enabled;
+            Properties.Settings.Default.Save();
+
+            SetStartup(enabled);
+        }
+        private void SetStartup(bool enable)
+        {
+            try
+            {
+                string appName = "QuackOSD";
+                string appPath = Assembly.GetExecutingAssembly().Location;
+
+                if (appPath.EndsWith(".dll")) appPath = appPath.Replace(".dll", ".exe");
+
+                RegistryKey rk = Registry.CurrentUser.OpenSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", true);
+
+                if (enable) rk.SetValue(appName, $"\"{appPath}\"");
+                else if (rk.GetValue(appName) != null) rk.DeleteValue(appName);
+            }
+            catch (Exception ex)
+            {
+                System.Windows.MessageBox.Show($"Failed to {(enable ? "enable" : "disable")} startup option.\n{ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
         }
 
         // --- Animation Tab ---
@@ -232,6 +274,11 @@ namespace QuackOSD
         private void CloseButton_Click(object sender, RoutedEventArgs e)
         {
             this.Hide(); //hide window
+        }
+
+        private void IsClickThrough_Unchecked(object sender, RoutedEventArgs e)
+        {
+
         }
     }
 }
