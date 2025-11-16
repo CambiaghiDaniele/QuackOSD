@@ -238,5 +238,77 @@ namespace QuackOSD.Properties {
                 this["IsClickThrough"] = value;
             }
         }
+        
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("#CC000000")]
+        public string BackgroundColor {
+            get {
+                return ((string)(this["BackgroundColor"]));
+            }
+            set {
+                this["BackgroundColor"] = value;
+            }
+        }
+        
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("#FFFFFFFF")]
+        public string ForegroundColor {
+            get {
+                return ((string)(this["ForegroundColor"]));
+            }
+            set {
+                this["ForegroundColor"] = value;
+            }
+        }
+        
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("WindowsTheme")]
+        public string BackgroundMode {
+            get {
+                return ((string)(this["BackgroundMode"]));
+            }
+            set {
+                this["BackgroundMode"] = value;
+            }
+        }
+        
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("AutoContrast")]
+        public string ForegroundMode {
+            get {
+                return ((string)(this["ForegroundMode"]));
+            }
+            set {
+                this["ForegroundMode"] = value;
+            }
+        }
+        
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("False")]
+        public bool ShowBorder {
+            get {
+                return ((bool)(this["ShowBorder"]));
+            }
+            set {
+                this["ShowBorder"] = value;
+            }
+        }
+        
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("1")]
+        public double BorderThickness {
+            get {
+                return ((double)(this["BorderThickness"]));
+            }
+            set {
+                this["BorderThickness"] = value;
+            }
+        }
     }
 }

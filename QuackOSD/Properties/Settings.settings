@@ -56,5 +56,23 @@
     <Setting Name="IsClickThrough" Type="System.Boolean" Scope="User">
       <Value Profile="(Default)">False</Value>
     </Setting>
+    <Setting Name="BackgroundColor" Type="System.String" Scope="User">
+      <Value Profile="(Default)">#CC000000</Value>
+    </Setting>
+    <Setting Name="ForegroundColor" Type="System.String" Scope="User">
+      <Value Profile="(Default)">#FFFFFFFF</Value>
+    </Setting>
+    <Setting Name="BackgroundMode" Type="System.String" Scope="User">
+      <Value Profile="(Default)">WindowsTheme</Value>
+    </Setting>
+    <Setting Name="ForegroundMode" Type="System.String" Scope="User">
+      <Value Profile="(Default)">AutoContrast</Value>
+    </Setting>
+    <Setting Name="ShowBorder" Type="System.Boolean" Scope="User">
+      <Value Profile="(Default)">False</Value>
+    </Setting>
+    <Setting Name="BorderThickness" Type="System.Double" Scope="User">
+      <Value Profile="(Default)">1</Value>
+    </Setting>
   </Settings>
 </SettingsFile>

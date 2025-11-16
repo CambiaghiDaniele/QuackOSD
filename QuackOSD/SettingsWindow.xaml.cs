@@ -1,10 +1,11 @@
-﻿using System;
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
 using Microsoft.Win32;
 using System.Reflection;
+using Windows.Media.Playback;
 
 namespace QuackOSD
 {
@@ -16,7 +17,7 @@ namespace QuackOSD
         public SettingsWindow()
         {
             InitializeComponent();
-            LoadSettings();
+            Loaded += (s, e) => LoadSettings();
             _isLoaded = true;
         }
 
@@ -65,6 +66,31 @@ namespace QuackOSD
             //animation - out animation
             SelectComboItem(AnimOutCombo, Properties.Settings.Default.AnimOutType);
             AnimOutDurationBox.Text = Properties.Settings.Default.AnimOutDuration.ToString();
+
+            //appearance - background
+            BgColorPicker.SelectedColor = ColorConverterHelper.ColorFromString(Properties.Settings.Default.BackgroundColor);
+            switch (Properties.Settings.Default.BackgroundMode)
+            {
+                case "Solid": BgModeSolid.IsChecked = true; break;
+                case "WindowsAccent": BgModeAccent.IsChecked = true; break;
+                case "CoverArt": BgModeCover.IsChecked = true; break;
+                case "WindowsTheme": default: BgModeTheme.IsChecked = true; break;
+            }
+
+            //appearance - foreground
+            FgColorPicker.SelectedColor = ColorConverterHelper.ColorFromString(Properties.Settings.Default.ForegroundColor);
+            switch (Properties.Settings.Default.ForegroundMode)
+            {
+                case "Solid": FgModeSolid.IsChecked = true; break;
+                case "WindowsAccent": FgModeAccent.IsChecked = true; break;
+                case "AutoContrast": default: FgModeAuto.IsChecked = true; break;
+            }
+
+            //appearance - border
+            ShowBorderCheck.IsChecked = Properties.Settings.Default.ShowBorder;
+            BorderThicknessSlider.Value = Properties.Settings.Default.BorderThickness;
+
+            UpdateColorUI();
 
             //behavior checkboxes state
             bool alwaysOn = IsAlwaysOnCheck.IsChecked == true;
@@ -264,7 +290,69 @@ namespace QuackOSD
             if(!regex.IsMatch(futureText)) e.Handled = true;
         }
 
-        // --- aspect WIP ---
+        // --- appearance ---
+        //update background color mode UI
+        private void BgMode_Checked(object sender, RoutedEventArgs e)
+        {
+            if (!_isLoaded) return;
+
+            string mode = "WindowsTheme"; //default
+            if (BgModeSolid.IsChecked == true) mode = "Solid";
+            if (BgModeAccent.IsChecked == true) mode = "WindowsAccent";
+            if (BgModeCover.IsChecked == true) mode = "CoverArt";
+
+            Properties.Settings.Default.BackgroundMode = mode;
+            Properties.Settings.Default.Save();
+
+            UpdateColorUI();
+            SettingsChanged?.Invoke(this, EventArgs.Empty);
+        }
+        //update foreground color mode UI
+        private void FgMode_Checked(object sender, RoutedEventArgs e)
+        {
+            if (!_isLoaded) return;
+            string mode = "AutoContrast"; //default
+            if (FgModeSolid.IsChecked == true) mode = "Solid";
+            if (FgModeAccent.IsChecked == true) mode = "WindowsAccent";
+
+            Properties.Settings.Default.ForegroundMode = mode;
+            Properties.Settings.Default.Save();
+
+            UpdateColorUI();
+            SettingsChanged?.Invoke(this, EventArgs.Empty);
+        }
+        //color pickers changed
+        private void ColorPicker_Changed(object sender, RoutedPropertyChangedEventArgs<System.Windows.Media.Color > e)
+        {
+            if (!_isLoaded || e.NewValue == null) return;
+
+            if (sender == BgColorPicker)
+                Properties.Settings.Default.BackgroundColor = e.NewValue.ToString();
+            else if(sender == FgColorPicker)
+                Properties.Settings.Default.ForegroundColor = e.NewValue.ToString();
+
+            Properties.Settings.Default.Save();
+            SettingsChanged?.Invoke(this, EventArgs.Empty);
+        }
+        //border settings changed
+        private void Border_Changed(object sender, RoutedEventArgs e)
+        {
+            if (!_isLoaded) return;
+
+            Properties.Settings.Default.ShowBorder = ShowBorderCheck.IsChecked == true;
+            Properties.Settings.Default.BorderThickness = BorderThicknessSlider.Value;
+            Properties.Settings.Default.Save();
+
+            UpdateColorUI();
+            SettingsChanged?.Invoke(this, EventArgs.Empty);
+        }
+        //enable/disable color pickers
+        private void UpdateColorUI()
+        {
+            BgColorPicker.IsEnabled = BgModeSolid.IsChecked == true;
+            FgColorPicker.IsEnabled = FgModeSolid.IsChecked == true;
+            BorderThicknessSlider.IsEnabled = ShowBorderCheck.IsChecked == true;
+        }
 
         //cancel the closing of the window, just hide it
         protected override void OnClosing(CancelEventArgs e)

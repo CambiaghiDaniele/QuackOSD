@@ -28,6 +28,8 @@ namespace QuackOSD
         private bool _isDraggingSeekbar = false;
         private double _lastSeekbarPercentage = 0;
 
+        private bool _isCleanedUp = false;
+
         //for progress bar prediction
         private TimeSpan _lastPosition = TimeSpan.Zero;
         private DateTime _lastUpdateTime = DateTime.Now;
@@ -85,13 +87,15 @@ namespace QuackOSD
 
             _settingsWindow.IsVisibleChanged += (s, e) =>
             {
-                if(_settingsWindow.Visibility == Visibility.Visible)
+                if (_settingsWindow.Visibility == Visibility.Visible)
                 {
                     //start preview mode
                     _isPreviewMode = true;
                     _osdHideTimer.Stop();
 
                     _osdWindow.UpdateAppearance();
+                    _osdWindow.UpdateBackgroundColor();
+                    _osdWindow.UpdateForegroundColor();
                     _osdWindow.UpdatePosition();
 
                     //stop animations
@@ -110,11 +114,15 @@ namespace QuackOSD
                 if (_isPreviewMode)
                 {
                     _osdWindow.UpdateAppearance();
+                    _osdWindow.UpdateBackgroundColor();
+                    _osdWindow.UpdateForegroundColor();
                     _osdWindow.UpdatePosition();
                 }
             };
             _settingsWindow.Closed += (s, e) => ExitPreviewMode();
             System.Windows.Application.Current.Exit += OnApplicationExit;
+            AppDomain.CurrentDomain.ProcessExit += CurrentDomanin_ProcessExit;
+            Microsoft.Win32.SystemEvents.SessionEnding += SystemEvents_SessionEnding;
         }
 
         private void InitializeOsd()
@@ -145,7 +153,9 @@ namespace QuackOSD
             InitializeTrayIcon();
 
             _osdWindow.UpdateAppearance();
-            _osdWindow.UpdatePosition(); 
+            _osdWindow.UpdateBackgroundColor();
+            _osdWindow.UpdateForegroundColor();
+            _osdWindow.UpdatePosition();
         }
 
         private void InitializeTrayIcon()
@@ -201,20 +211,6 @@ namespace QuackOSD
             }
         }
 
-        //clean up on exit
-        private void OnApplicationExit(object sender, ExitEventArgs e)
-        {
-            //unhook keyboard hook
-            if (_hookID != IntPtr.Zero) UnhookWindowsHookEx(_hookID);
-
-            //remove tray icon
-            if (_notifyIcon != null) _notifyIcon?.Dispose();
-
-            //close all windows
-            _osdWindow?.Close();
-            _settingsWindow?.Close();
-        }
-
         private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
         {
             if (nCode >= 0 && wParam == (IntPtr)WM_KEYDOWN)
@@ -268,7 +264,7 @@ namespace QuackOSD
         {
             _isPreviewMode = false;
 
-            if(Properties.Settings.Default.IsAlwaysOn)
+            if (Properties.Settings.Default.IsAlwaysOn)
             {
                 _osdWindow.Visibility = Visibility.Visible;
                 ResetOsdTimer();
@@ -330,7 +326,7 @@ namespace QuackOSD
         private async Task OsdWindow_SeekRequested(double percentage)
         {
             _lastSeekbarPercentage = percentage;
-            if(_isDraggingSeekbar) return;
+            if (_isDraggingSeekbar) return;
             await SendSeekCommand(percentage);
             ResetOsdTimer();
         }
@@ -374,7 +370,7 @@ namespace QuackOSD
             _ = SendSeekCommand(_lastSeekbarPercentage);
             ResetOsdTimer();
 
-            if(_isPlaying) _progressTimer.Start();
+            if (_isPlaying) _progressTimer.Start();
         }
 
         // --- Media Spy Core ---
@@ -505,7 +501,7 @@ namespace QuackOSD
         //method for "live preview"
         private void OnSettingsChanged(Object sender, EventArgs e)
         {
-            if(_osdWindow.Visibility == Visibility.Visible)
+            if (_osdWindow.Visibility == Visibility.Visible)
             {
                 _osdWindow.UpdateAppearance();
                 _osdWindow.UpdatePosition();
@@ -519,8 +515,8 @@ namespace QuackOSD
 
             var timeline = _currentSession.GetTimelineProperties();
             _lastPlaybackInfo = _currentSession.GetPlaybackInfo();
-            
-            if(timeline == null) return;
+
+            if (timeline == null) return;
 
             _lastTimeline = timeline;
 
@@ -532,7 +528,7 @@ namespace QuackOSD
             _osdWindow.MediaProgressBar.Minimum = timeline.StartTime.TotalSeconds;
             _osdWindow.MediaProgressBar.Maximum = timeline.EndTime.TotalSeconds;
             string newTotalTime = timeline.EndTime.ToString(@"m\:ss");
-            if(_lastTotalTimeText != newTotalTime)
+            if (_lastTotalTimeText != newTotalTime)
             {
                 _osdWindow.TotalTimeText.Text = newTotalTime;
                 _lastTotalTimeText = newTotalTime;
@@ -555,18 +551,18 @@ namespace QuackOSD
 
             TimeSpan currentPosition = _lastPosition;
 
-            if(_isPlaying)
+            if (_isPlaying)
             {
                 double elapsedSeconds = (DateTime.Now - _lastUpdateTime).TotalSeconds;
                 currentPosition += TimeSpan.FromSeconds(elapsedSeconds * _playbackRate);
             }
 
-            if(currentPosition.TotalSeconds > _osdWindow.MediaProgressBar.Maximum) currentPosition = TimeSpan.FromSeconds(_osdWindow.MediaProgressBar.Maximum);
-            
+            if (currentPosition.TotalSeconds > _osdWindow.MediaProgressBar.Maximum) currentPosition = TimeSpan.FromSeconds(_osdWindow.MediaProgressBar.Maximum);
+
             _osdWindow.MediaProgressBar.Value = currentPosition.TotalSeconds;
             string newTimeText = currentPosition.ToString(@"m\:ss");
 
-            if(_lastTimeText != newTimeText)
+            if (_lastTimeText != newTimeText)
             {
                 _osdWindow.CurrentTimeText.Text = newTimeText;
                 _lastTimeText = newTimeText;
@@ -587,8 +583,9 @@ namespace QuackOSD
             {
                 _osdWindow.TitleTextBlock.Text = mediaProperties.Title ?? "Sconosciuto";
                 _osdWindow.ArtistTextBlock.Text = mediaProperties.Artist ?? "";
-                //skip loading thumbnail if disabled
-                if (Properties.Settings.Default.ShowCover) await LoadThumbnailAsync(mediaProperties.Thumbnail);
+                //skip loading thumbnail if disabled and background mode is not cover art
+                if (Properties.Settings.Default.ShowCover || Properties.Settings.Default.BackgroundMode == "CoverArt") await LoadThumbnailAsync(mediaProperties.Thumbnail);
+                else _osdWindow.AlbumArtImage.Source = null;
             }
 
             switch (_lastPlaybackInfo.PlaybackStatus)
@@ -645,19 +642,22 @@ namespace QuackOSD
         {
 
             bool wasVisible = (_osdWindow.Visibility == Visibility.Visible && _osdWindow.Opacity > 0.1);
-            
+
             _progressTimer.Start();
 
-            if(!wasVisible) _osdWindow.AnimateIn();
+            _osdWindow.UpdateBackgroundColor();
+            _osdWindow.UpdateForegroundColor();
+
+            if (!wasVisible) _osdWindow.AnimateIn();
 
             ResetOsdTimer();
         }
- 
+
         private void ResetOsdTimer()
         {
             _osdHideTimer.Stop();
 
-            if(Properties.Settings.Default.IsAlwaysOn) return;
+            if (Properties.Settings.Default.IsAlwaysOn) return;
 
             if (!_isPreviewMode)
             {
@@ -665,6 +665,130 @@ namespace QuackOSD
                 _osdHideTimer.Interval = TimeSpan.FromMilliseconds(durationMs);
                 _osdHideTimer.Start();
             }
+        }
+
+        private void OnApplicationExit(object sender, ExitEventArgs e)
+        {
+            Cleanup();
+        }
+        private void CurrentDomanin_ProcessExit(object sender, EventArgs e)
+        {
+            Cleanup();
+        }
+        private void SystemEvents_SessionEnding(object sender, Microsoft.Win32.SessionEndingEventArgs e)
+        {
+            Cleanup();
+        }
+        //cleanup resources before exit
+        private void Cleanup()
+        {
+            //avoid multiple calls
+            if (_isCleanedUp) return;
+            _isCleanedUp = true;
+
+            try
+            {
+                // Unhook keyboard hook
+                try
+                {
+                    if (_hookID != IntPtr.Zero)
+                    {
+                        bool unhooked = UnhookWindowsHookEx(_hookID);
+                        if (!unhooked)
+                        {
+                            int err = Marshal.GetLastWin32Error();
+                            Debug.WriteLine($"Warning: UnhookWindowsHookEx failed with error {err}");
+                        }
+                        _hookID = IntPtr.Zero;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine("Errore durante Unhook: " + ex.Message);
+                }
+
+                // Dispose notify icon
+                try
+                {
+                    if (_notifyIcon != null)
+                    {
+                        _notifyIcon.Visible = false;
+                        _notifyIcon.DoubleClick -= (s, e) => OpenSettings();
+                        _notifyIcon.Dispose();
+                        _notifyIcon = null;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine("Errore disposing tray icon: " + ex.Message);
+                }
+
+                // Stop timers
+                try
+                {
+                    _osdHideTimer?.Stop();
+                    _progressTimer?.Stop();
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine("Errore stopping timers: " + ex.Message);
+                }
+
+                // Unsubscribe events (safely)
+                try
+                {
+                    if (_sessionManager != null)
+                        _sessionManager.CurrentSessionChanged -= SessionManager_CurrentSessionChanged;
+
+                    if (_currentSession != null)
+                    {
+                        _currentSession.MediaPropertiesChanged -= CurrentSession_MediaPropertiesChanged;
+                        _currentSession.PlaybackInfoChanged -= CurrentSession_PlaybackInfoChanged;
+                        _currentSession.TimelinePropertiesChanged -= CurrentSession_TimelinePropertiesChanged;
+                    }
+
+                    if (_osdWindow != null)
+                    {
+                        _osdWindow.PrevClicked -= OsdWindow_PrevClicked;
+                        _osdWindow.PlayPauseClicked -= OsdWindow_PlayPauseClicked;
+                        _osdWindow.NextClicked -= OsdWindow_NextClicked;
+                        _osdWindow.SeekRequested -= async (percentage) => await OsdWindow_SeekRequested(percentage);
+                        _osdWindow.DragStarted -= OsdWindow_DragStarted;
+                        _osdWindow.DragEnded -= OsdWindow_DragEnded;
+                    }
+
+                    if (_settingsWindow != null)
+                    {
+                        _settingsWindow.IsVisibleChanged -= (s, e) => { /* ... */ };
+                        _settingsWindow.SettingsChanged -= (s, e) => { /* ... */ };
+                        _settingsWindow.Closed -= (s, e) => ExitPreviewMode();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine("Errore unsubscribing events: " + ex.Message);
+                }
+
+                // Close windows
+                try
+                {
+                    _osdWindow?.Close();
+                    _settingsWindow?.Close();
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine("Errore closing windows: " + ex.Message);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("Errore Cleanup generale: " + ex.Message);
+            }
+        }
+        protected override void OnClosed(EventArgs e)
+        {
+            base.OnClosed(e);
+            Cleanup();
         }
     }
 }
