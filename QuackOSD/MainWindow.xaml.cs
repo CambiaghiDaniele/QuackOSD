@@ -5,254 +5,307 @@ using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using Windows.Media.Control;
 using Windows.Storage.Streams;
-using System.Runtime.InteropServices;
 
 namespace QuackOSD
 {
+    // Main application logic window (often hidden).
+    // This class acts as the "controller" in an MVC pattern. It coordinates:
+    //* 1. The OsdWindow(the View).
+    //* 2. The SettingsWindow(another View).
+    //* 3. The KeyboardHookService(a Service).
+    //* 4. The Windows Global Media Session(the Model/Data Source).
     public partial class MainWindow : Window
     {
+        //--- Services and Managers ---
+
+        // Service to intercept global media key presses (Play, Pause, Next, Prev).
+        private KeyboardHookService _keyboardHook;
+
+        // Manages all system media sessions (e.g., Spotify, Chrome, Groove Music).
         private GlobalSystemMediaTransportControlsSessionManager _sessionManager;
+
+        // The currently active media session (e.g., the app currently playing audio).
         private GlobalSystemMediaTransportControlsSession _currentSession;
+
+        // Stores the last known playback info (Playing, Paused, etc.) to detect changes.
         private GlobalSystemMediaTransportControlsSessionPlaybackInfo _lastPlaybackInfo;
+
+        // Stores the last known timeline properties (Start, End) to detect changes.
         private GlobalSystemMediaTransportControlsSessionTimelineProperties _lastTimeline;
 
+
+        //--- Windows and Timers ---
+
+        // The visual OSD window that appears on screen.
         private OsdWindow _osdWindow;
+
+        // The configuration/settings window.
         private SettingsWindow _settingsWindow;
+
+        // Timer responsible for hiding the OSD after a set duration.
         private DispatcherTimer _osdHideTimer;
+
+        // Timer that fires periodically (e.g., 4x/sec) to update the progress bar visuals.
         private DispatcherTimer _progressTimer;
 
+        // The application's icon in the system tray (notification area).
         private NotifyIcon _notifyIcon;
 
+
+        //--- State Variables ---
+
+        // Flag indicating if the settings window is open. When true, the OSD stays visible.
         private bool _isPreviewMode = false;
 
+        // Flag indicating if the user is currently dragging the OSD's seek bar.
         private bool _isDraggingSeekbar = false;
+
+        // Stores the last reported percentage from the seek bar, used when dragging ends.
         private double _lastSeekbarPercentage = 0;
 
+        // Flag to ensure the Cleanup() method is only called once on exit.
         private bool _isCleanedUp = false;
 
-        //for progress bar prediction
+        // Timestamp of the last physical media key press. Used to differentiate user actions from app-driven events.
+        private DateTime _lastMediaKeyPress = DateTime.MinValue;
+
+
+        //--- Cached Timeline Info ---
+        // These are used by _progressTimer to manually calculate the current playback
+        // position, as the system only sends timeline updates intermittently.
+
+        // The last *reported* position from the media session.
         private TimeSpan _lastPosition = TimeSpan.Zero;
+
+        // The system time (DateTime.Now) when _lastPosition was updated.
         private DateTime _lastUpdateTime = DateTime.Now;
+
+        // Cached status of whether media is currently playing.
         private bool _isPlaying = false;
+
+        // Cached playback rate (e.g., 1.0 for normal, 1.5 for fast-forward).
         private double _playbackRate = 1;
+
+        // Cached string for the current time text (e.g., "1:23") to prevent redundant UI updates.
         private string _lastTimeText = "";
+
+        // Cached string for the total time text (e.g., "3:45") to prevent redundant UI updates.
         private string _lastTotalTimeText = "";
 
-        //keyboard hook constants
-        private const int WH_KEYBOARD_LL = 13;
-        private const int WM_KEYDOWN = 0x0100;
-        //media key virtual key codes
-        private const int VK_MEDIA_PLAY_PAUSE = 0xB3;
-        private const int VK_MEDIA_NEXT_TRACK = 0xB0;
-        private const int VK_MEDIA_PREV_TRACK = 0xB1;
-        private const int VK_MEDIA_STOP = 0xB2;
-        //keyboard hook variables
-        private static LowLevelKeyboardProc _proc;
-        private static IntPtr _hookID = IntPtr.Zero;
-        //to prevent multiple osd on multiple keypresses
-        private DateTime _lastMediaKeyPress = DateTime.MinValue;
-        //keyboard hook methods
-        private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
-        //set hook
-        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
-        //remove hook
-        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool UnhookWindowsHookEx(IntPtr hhk);
-        //call next hook
-        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
-        //get module handle
-        [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        private static extern IntPtr GetModuleHandle(string lpModuleName);
-
-        //constructor
+        // Constructor. Initializes the main application controller.
+        // <param name="osd">The injected OSD window instance.</param>
+        // <param name="settings">The injected Settings window instance.</param>
         public MainWindow(OsdWindow osd, SettingsWindow settings)
         {
             InitializeComponent();
 
-            //set keyboard hook
-            _proc = HookCallback;
-            _hookID = SetHook(_proc);
+            // Initialize and start the global keyboard hook
+            _keyboardHook = new KeyboardHookService();
+            _keyboardHook.MediaKeyPressed += OnMediaKeyPressed; // Subscribe to the event
+            _keyboardHook.Start();
 
+            // Assign the injected windows
             _osdWindow = osd;
             _settingsWindow = settings;
 
+            // Set up OSD timers and event handlers
             InitializeOsd();
+            // Start monitoring the system media session (fire and forget)
             _ = StartMediaSpyAsync();
 
-            _osdWindow.AnimationCompleted += (s, e) => _progressTimer.Stop();
-            _osdWindow.SizeChanged += (s, e) => _osdWindow.UpdatePosition();
+            // Event handlers from the OSD and Settings windows
+            _osdWindow.AnimationCompleted += OsdWindow_AnimationCompleted;
+            _osdWindow.SizeChanged += OsdWindow_SizeChanged;
 
-            _settingsWindow.IsVisibleChanged += (s, e) =>
-            {
-                if (_settingsWindow.Visibility == Visibility.Visible)
-                {
-                    //start preview mode
-                    _isPreviewMode = true;
-                    _osdHideTimer.Stop();
+            _settingsWindow.IsVisibleChanged += SettingsWindow_IsVisibleChanged;
+            _settingsWindow.SettingsChanged += SettingsWindow_SettingsChanged;
+            _settingsWindow.Closed += SettingsWindow_Closed;
 
-                    _osdWindow.UpdateAppearance();
-                    _osdWindow.UpdateBackgroundColor();
-                    _osdWindow.UpdateForegroundColor();
-                    _osdWindow.UpdatePosition();
-
-                    //stop animations
-                    _osdWindow.BeginAnimation(Window.OpacityProperty, null);
-
-                    _osdWindow.Opacity = 1;
-                    _osdWindow.Visibility = Visibility.Visible;
-                }
-                else
-                {
-                    ExitPreviewMode();
-                }
-            };
-            _settingsWindow.SettingsChanged += (s, e) =>
-            {
-                if (_isPreviewMode)
-                {
-                    _osdWindow.UpdateAppearance();
-                    _osdWindow.UpdateBackgroundColor();
-                    _osdWindow.UpdateForegroundColor();
-                    _osdWindow.UpdatePosition();
-                }
-            };
-            _settingsWindow.Closed += (s, e) => ExitPreviewMode();
+            // Hook into all possible application exit events to ensure Cleanup() is called
             System.Windows.Application.Current.Exit += OnApplicationExit;
-            AppDomain.CurrentDomain.ProcessExit += CurrentDomanin_ProcessExit;
+            AppDomain.CurrentDomain.ProcessExit += CurrentDomain_ProcessExit;
             Microsoft.Win32.SystemEvents.SessionEnding += SystemEvents_SessionEnding;
         }
 
+        // Sets up timers and event handlers related to the OSD window.
         private void InitializeOsd()
         {
-            //configure osd visibility timer
+            // Timer to auto-hide the OSD
             _osdHideTimer = new DispatcherTimer();
-            _osdHideTimer.Tick += (sender, args) =>
-            {
-                _osdHideTimer.Stop();
-                _osdWindow.AnimateOut();
-            };
+            _osdHideTimer.Tick += OsdHideTimer_Tick;
 
-            //configure progress bar update timer
-            _progressTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
-            _progressTimer.Tick += (s, e) => UpdateProgressBarVisuals();
+            // Timer to update the progress bar visuals
+            _progressTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) }; // ~4 updates per second
+            _progressTimer.Tick += ProgressTimer_Tick;
 
-            //button event handlers
+            //--- OSD Button Event Handlers ---
             _osdWindow.PrevClicked += OsdWindow_PrevClicked;
             _osdWindow.PlayPauseClicked += OsdWindow_PlayPauseClicked;
             _osdWindow.NextClicked += OsdWindow_NextClicked;
 
-            //progress bar click to seek
-            _osdWindow.SeekRequested += async (percentage) => await OsdWindow_SeekRequested(percentage);
-            _osdWindow.DragStarted += OsdWindow_DragStarted;
-            _osdWindow.DragEnded += OsdWindow_DragEnded;
+            //--- OSD Progress Bar Event Handlers ---
+            _osdWindow.SeekRequested += OsdWindow_SeekRequested; // For clicks
+            _osdWindow.DragStarted += OsdWindow_DragStarted;     // For drag start
+            _osdWindow.DragEnded += OsdWindow_DragEnded;         // For drag end
 
-            //setup icon in system tray
+            // Initialize the system tray icon
             InitializeTrayIcon();
 
+            // Apply initial appearance settings from properties
             _osdWindow.UpdateAppearance();
             _osdWindow.UpdateBackgroundColor();
             _osdWindow.UpdateForegroundColor();
             _osdWindow.UpdatePosition();
         }
 
+        // Initializes the system tray (NotifyIcon) and its context menu.
         private void InitializeTrayIcon()
         {
-            //create context menu to tray icon
+            // Create the right-click context menu
             var trayMenu = new ContextMenuStrip();
+            trayMenu.Items.Add("Settings...", null, (s, e) => _settingsWindow.Show());
+            trayMenu.Items.Add("-"); // Separator
+            trayMenu.Items.Add("Exit QuackOSD", null, (s, e) => System.Windows.Application.Current.Shutdown());
 
-            //add options to context menu
-            trayMenu.Items.Add("Impostazioni...", null, (s, e) => _settingsWindow.Show());
-            trayMenu.Items.Add("-"); //separator
-            trayMenu.Items.Add("Esci da QuackOSD", null, (s, e) => System.Windows.Application.Current.Shutdown());
-
-            //create tray icon
+            // Initialize the NotifyIcon
             _notifyIcon = new NotifyIcon
             {
-                Text = "QuackOSD", //hover
+                Text = "QuackOSD",
                 Visible = true,
                 ContextMenuStrip = trayMenu
             };
-            //open settings windows when double click
+            // Show settings on double-click
             _notifyIcon.DoubleClick += (s, e) => OpenSettings();
 
-            //load icon from resources
+            // Load the icon from embedded resources
             try
             {
                 var iconUri = new Uri("pack://application:,,,/QuackOSD;component/quack.ico");
                 var resourceInfo = System.Windows.Application.GetResourceStream(iconUri);
-
                 if (resourceInfo != null)
                 {
                     Stream iconStream = resourceInfo.Stream;
                     _notifyIcon.Icon = new System.Drawing.Icon(iconStream);
                 }
-                else
-                {
-                    Debug.WriteLine("ERRORE: Icona 'quack.ico' non trovata. Assicurati che 'Build Action' sia 'Resource'.");
-                }
+                else { Debug.WriteLine("ERROR: Icon 'quack.ico' not found."); }
             }
-            catch (Exception ex)
-            {
-                //if icon not found
-                Debug.WriteLine("ERRORE: Icona non trovata. " + ex.Message);
-            }
+            catch (Exception ex) { Debug.WriteLine("ERROR: Icon not found. " + ex.Message); }
         }
 
-        //keyboard hook callback
-        private IntPtr SetHook(LowLevelKeyboardProc proc)
+        #region Internal Event Handlers
+
+        // Called when the OSD hide timer elapses.
+        private void OsdHideTimer_Tick(object sender, EventArgs e)
         {
-            using (var curProcess = Process.GetCurrentProcess())
-            using (var curModule = curProcess.MainModule)
-            {
-                return SetWindowsHookEx(WH_KEYBOARD_LL, proc, GetModuleHandle(curModule.ModuleName), 0);
-            }
+            _osdHideTimer.Stop();
+            _osdWindow.AnimateOut(); // Start the fade-out animation
         }
 
-        private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
+        // Called by _progressTimer. Updates the visual position of the seek bar.
+        private void ProgressTimer_Tick(object sender, EventArgs e)
         {
-            if (nCode >= 0 && wParam == (IntPtr)WM_KEYDOWN)
-            {
-                int vkCode = Marshal.ReadInt32(lParam);
-                //check for media keys
-                if (vkCode == VK_MEDIA_PLAY_PAUSE || vkCode == VK_MEDIA_NEXT_TRACK || vkCode == VK_MEDIA_PREV_TRACK || vkCode == VK_MEDIA_STOP)
-                {
-                    DateTime now = DateTime.Now;
-                    /*prevent multiple osd on multiple keypresses within 100ms
-                    if ((now - _lastMediaKeyPress).TotalMilliseconds > 500)
-                    {
-                        _lastMediaKeyPress = now;
-                        ShowAndResetOsd();
-                    }*/
-                    _lastMediaKeyPress = now;
-                }
-            }
-            return CallNextHookEx(_hookID, nCode, wParam, lParam);
+            UpdateProgressBarVisuals();
         }
 
-        //open settings windows
+        // Called by the OSD window when its fade-out animation is complete.
+        private void OsdWindow_AnimationCompleted(object sender, EventArgs e)
+        {
+            // Stop the progress timer to save CPU when the OSD is hidden
+            _progressTimer.Stop();
+        }
+
+        // Called by the OSD window when its size changes (e.g., text content changes).
+        private void OsdWindow_SizeChanged(object sender, SizeChangedEventArgs e)
+        {
+            // Reposition the window to ensure it's still in the correct place
+            _osdWindow.UpdatePosition();
+        }
+
+        // Called when the Settings window's visibility changes. Manages "Preview Mode".
+        private void SettingsWindow_IsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
+        {
+            if (_settingsWindow.Visibility == Visibility.Visible)
+            {
+                //--- Entering Preview Mode ---
+                _isPreviewMode = true;
+                _osdHideTimer.Stop(); // Prevent the OSD from hiding
+
+                // Apply current settings to the OSD
+                _osdWindow.UpdateAppearance();
+                _osdWindow.UpdateBackgroundColor();
+                _osdWindow.UpdateForegroundColor();
+                _osdWindow.UpdatePosition();
+
+                // Cancel any running animations and make the OSD fully visible
+                _osdWindow.BeginAnimation(Window.OpacityProperty, null);
+                _osdWindow.Opacity = 1;
+                _osdWindow.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                //--- Exiting Preview Mode ---
+                ExitPreviewMode();
+            }
+        }
+
+        // Called by the Settings window when any setting has changed.
+        private void SettingsWindow_SettingsChanged(object sender, EventArgs e)
+        {
+            // If in preview mode, update the OSD visuals live
+            if (_isPreviewMode)
+            {
+                _osdWindow.UpdateAppearance();
+                _osdWindow.UpdateBackgroundColor();
+                _osdWindow.UpdateForegroundColor();
+                _osdWindow.UpdatePosition();
+            }
+        }
+
+        // Called by the Settings window when it is closed (e.g., by clicking the 'X').
+        private void SettingsWindow_Closed(object sender, EventArgs e)
+        {
+            ExitPreviewMode();
+        }
+
+        // --- Application Exit Handlers ---
+        private void OnApplicationExit(object sender, ExitEventArgs e) { Cleanup(); }
+        private void CurrentDomain_ProcessExit(object sender, EventArgs e) { Cleanup(); }
+        private void SystemEvents_SessionEnding(object sender, Microsoft.Win32.SessionEndingEventArgs e) { Cleanup(); }
+        protected override void OnClosed(EventArgs e) { base.OnClosed(e); Cleanup(); }
+
+        // Called by the KeyboardHookService when a media key is pressed.
+        private void OnMediaKeyPressed(object sender, EventArgs e)
+        {
+            // Record the time of the key press
+            _lastMediaKeyPress = DateTime.Now;
+        }
+
+        #endregion
+
+        #region Preview and Exit Logic
+
+        // Opens the settings window and enters "Preview Mode".
         private void OpenSettings()
         {
-            //set to "live preview" mode
+            // Set state to "live preview" mode
             _isPreviewMode = true;
 
-            //get setting windows on screen
+            // Show and activate the settings window
             _settingsWindow.Show();
             _settingsWindow.Activate();
 
-            //update osd postion
+            // Update OSD position
             _osdWindow.UpdatePosition();
 
-            //stop animations and make osd visible
+            // Stop animations and make OSD visible
             _osdWindow.Visibility = Visibility.Visible;
-            _osdWindow.BeginAnimation(Window.OpacityProperty, null);
+            _osdWindow.BeginAnimation(Window.OpacityProperty, null); // Cancel fade
             _osdWindow.Opacity = 1;
 
-            //stop osd fade out to enter "live preview"
+            // Stop the OSD from hiding
             _osdHideTimer.Stop();
 
+            // If a timeline exists, start the progress timer for the preview
             if (Properties.Settings.Default.ShowTimeLine && _lastTimeline != null)
             {
                 _progressTimer.Start();
@@ -260,10 +313,12 @@ namespace QuackOSD
             }
         }
 
+        // Exits "Preview Mode" and restores normal OSD behavior.
         private void ExitPreviewMode()
         {
             _isPreviewMode = false;
 
+            // If "Always On" is enabled, just reset the timer (if applicable)
             if (Properties.Settings.Default.IsAlwaysOn)
             {
                 _osdWindow.Visibility = Visibility.Visible;
@@ -271,6 +326,7 @@ namespace QuackOSD
                 return;
             }
 
+            // If media is currently playing, keep the OSD visible and reset the timer
             if (_currentSession != null)
             {
                 var playbackInfo = _currentSession.GetPlaybackInfo();
@@ -283,12 +339,117 @@ namespace QuackOSD
                 }
             }
 
+            // Otherwise, hide the OSD
             _osdWindow.Visibility = Visibility.Collapsed;
             ResetOsdTimer();
         }
 
+        // Cleans up all resources, timers, and event hooks before the application exits.
+        private void Cleanup()
+        {
+            // Avoid multiple cleanup calls
+            if (_isCleanedUp) return;
+            _isCleanedUp = true;
 
-        //button event handlers
+            try
+            {
+                // Unhook keyboard hook
+                try
+                {
+                    if (_keyboardHook != null)
+                    {
+                        _keyboardHook.MediaKeyPressed -= OnMediaKeyPressed;
+                        _keyboardHook.Stop();
+                        _keyboardHook = null;
+                    }
+                }
+                catch (Exception ex) { Debug.WriteLine("Error during Unhook: " + ex.Message); }
+
+                // Dispose notify icon
+                try
+                {
+                    if (_notifyIcon != null)
+                    {
+                        _notifyIcon.Visible = false;
+                        // Note: Unsubscribing from lambda can be tricky, but it's safe here
+                        // because the object is being disposed immediately after.
+                        _notifyIcon.DoubleClick -= (s, e) => OpenSettings();
+                        _notifyIcon.Dispose();
+                        _notifyIcon = null;
+                    }
+                }
+                catch (Exception ex) { Debug.WriteLine("Error disposing tray icon: " + ex.Message); }
+
+                // Stop timers and unsubscribe events
+                try
+                {
+                    if (_osdHideTimer != null)
+                    {
+                        _osdHideTimer.Stop();
+                        _osdHideTimer.Tick -= OsdHideTimer_Tick;
+                    }
+                    if (_progressTimer != null)
+                    {
+                        _progressTimer.Stop();
+                        _progressTimer.Tick -= ProgressTimer_Tick;
+                    }
+                }
+                catch (Exception ex) { Debug.WriteLine("Error stopping timers: " + ex.Message); }
+
+                // Unsubscribe from all events to prevent memory leaks
+                try
+                {
+                    if (_sessionManager != null)
+                        _sessionManager.CurrentSessionChanged -= SessionManager_CurrentSessionChanged;
+
+                    if (_currentSession != null)
+                    {
+                        _currentSession.MediaPropertiesChanged -= CurrentSession_MediaPropertiesChanged;
+                        _currentSession.PlaybackInfoChanged -= CurrentSession_PlaybackInfoChanged;
+                        _currentSession.TimelinePropertiesChanged -= CurrentSession_TimelinePropertiesChanged;
+                    }
+
+                    if (_osdWindow != null)
+                    {
+                        _osdWindow.AnimationCompleted -= OsdWindow_AnimationCompleted;
+                        _osdWindow.SizeChanged -= OsdWindow_SizeChanged;
+                        _osdWindow.PrevClicked -= OsdWindow_PrevClicked;
+                        _osdWindow.PlayPauseClicked -= OsdWindow_PlayPauseClicked;
+                        _osdWindow.NextClicked -= OsdWindow_NextClicked;
+                        _osdWindow.SeekRequested -= OsdWindow_SeekRequested;
+                        _osdWindow.DragStarted -= OsdWindow_DragStarted;
+                        _osdWindow.DragEnded -= OsdWindow_DragEnded;
+                    }
+
+                    if (_settingsWindow != null)
+                    {
+                        _settingsWindow.IsVisibleChanged -= SettingsWindow_IsVisibleChanged;
+                        _settingsWindow.SettingsChanged -= SettingsWindow_SettingsChanged;
+                        _settingsWindow.Closed -= SettingsWindow_Closed;
+                    }
+
+                    System.Windows.Application.Current.Exit -= OnApplicationExit;
+                    AppDomain.CurrentDomain.ProcessExit -= CurrentDomain_ProcessExit;
+                    Microsoft.Win32.SystemEvents.SessionEnding -= SystemEvents_SessionEnding;
+                }
+                catch (Exception ex) { Debug.WriteLine("Error unsubscribing events: " + ex.Message); }
+
+                // Close windows
+                try
+                {
+                    _osdWindow?.Close();
+                    _settingsWindow?.Close();
+                }
+                catch (Exception ex) { Debug.WriteLine("Error closing windows: " + ex.Message); }
+            }
+            catch (Exception ex) { Debug.WriteLine("General Cleanup Error: " + ex.Message); }
+        }
+
+        #endregion
+
+        #region OSD Button Handlers
+
+        // Called when the "Previous" button is clicked on the OSD.
         private async void OsdWindow_PrevClicked(object sender, RoutedEventArgs e)
         {
             if (_currentSession != null)
@@ -298,6 +459,7 @@ namespace QuackOSD
             }
         }
 
+        // Called when the "Play/Pause" button is clicked on the OSD.
         private async void OsdWindow_PlayPauseClicked(object sender, RoutedEventArgs e)
         {
             if (_currentSession != null)
@@ -314,6 +476,8 @@ namespace QuackOSD
                 ShowAndResetOsd();
             }
         }
+
+        // Called when the "Next" button is clicked on the OSD.
         private async void OsdWindow_NextClicked(object sender, RoutedEventArgs e)
         {
             if (_currentSession != null)
@@ -323,14 +487,18 @@ namespace QuackOSD
             }
         }
 
-        private async Task OsdWindow_SeekRequested(double percentage)
+        // Called when the user clicks on the seek bar (but doesn't drag).
+        private void OsdWindow_SeekRequested(double percentage)
         {
             _lastSeekbarPercentage = percentage;
-            if (_isDraggingSeekbar) return;
-            await SendSeekCommand(percentage);
+            if (_isDraggingSeekbar) return; // Ignore if a drag is in progress
+
+            _ = SendSeekCommand(percentage);
             ResetOsdTimer();
         }
 
+        // Sends the seek command to the media session.
+        // <param name="percentage">The desired position as a percentage (0.0 to 1.0).</param>
         private async Task SendSeekCommand(double percentage)
         {
             if (_currentSession == null || _lastTimeline == null || _lastTimeline.EndTime == TimeSpan.Zero) return;
@@ -340,76 +508,76 @@ namespace QuackOSD
                 double targetSeconds = totalSeconds * percentage;
                 TimeSpan newPosition = TimeSpan.FromSeconds(targetSeconds);
 
+                // Try to change the playback position
                 bool success = await _currentSession.TryChangePlaybackPositionAsync(newPosition.Ticks);
-
                 if (success)
                 {
+                    // Manually update the last position to give immediate visual feedback
                     _lastPosition = newPosition;
                     _lastUpdateTime = DateTime.Now;
                     UpdateProgressBarVisuals();
                 }
             }
-            catch (Exception ex)
-            {
-                Debug.WriteLine("Errore durante il seek: " + ex.Message);
-            }
+            catch (Exception ex) { Debug.WriteLine("Error during seek: " + ex.Message); }
         }
 
-        //pause timer when dragging
+        // Called when the user starts dragging the seek bar.
         private void OsdWindow_DragStarted(object sender, EventArgs e)
         {
             _isDraggingSeekbar = true;
-            _osdHideTimer.Stop();
-            _progressTimer.Stop();
+            _osdHideTimer.Stop(); // Stop OSD from hiding
+            _progressTimer.Stop(); // Stop progress bar from auto-updating
         }
 
-        //start timer when drag ended
+        // Called when the user finishes dragging the seek bar.
         private void OsdWindow_DragEnded(object sender, EventArgs e)
         {
             _isDraggingSeekbar = false;
+            // Send the final seek command with the last known percentage
             _ = SendSeekCommand(_lastSeekbarPercentage);
             ResetOsdTimer();
-
-            if (_isPlaying) _progressTimer.Start();
+            if (_isPlaying) _progressTimer.Start(); // Resume progress updates
         }
 
-        // --- Media Spy Core ---
+        #endregion
+
+        #region Media Session Handlers
+
+        // Initializes the connection to the Windows Global Media Session Manager.
         private async Task StartMediaSpyAsync()
         {
             try
             {
-                // Richiede l'accesso alla session manager
+                // Request access to the session manager
                 _sessionManager = await GlobalSystemMediaTransportControlsSessionManager.RequestAsync();
-
                 if (_sessionManager == null)
                 {
-                    Debug.WriteLine("Impossibile ottenere il Session Manager.");
+                    Debug.WriteLine("Could not get Session Manager.");
                     return;
                 }
-
-                // Iscriviti all'evento di cambio sessione
+                // Subscribe to session changes
                 _sessionManager.CurrentSessionChanged += SessionManager_CurrentSessionChanged;
-
-                // Collega la sessione corrente
+                // Subscribe to the session that is active *right now*
                 await TrySubscribeToCurrentSessionAsync();
             }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Errore in StartMediaSpy: {ex.Message}");
-            }
+            catch (Exception ex) { Debug.WriteLine($"Error in StartMediaSpy: {ex.Message}"); }
         }
 
+        // Called when the active media session changes (e.g., switching from Spotify to YouTube).
         private void SessionManager_CurrentSessionChanged(GlobalSystemMediaTransportControlsSessionManager sender, CurrentSessionChangedEventArgs args)
         {
+            // Switch to the UI thread to handle session changes
             _ = Dispatcher.InvokeAsync(async () =>
             {
-                Debug.WriteLine("=== Sessione Cambiata ===");
+                Debug.WriteLine("=== Session Changed ===");
                 await TrySubscribeToCurrentSessionAsync();
             });
         }
 
+        // Unsubscribes from the old session (if any) and subscribes to the new current session.
         private async Task TrySubscribeToCurrentSessionAsync()
         {
+            // Unsubscribe from the previous session's events
             if (_currentSession != null)
             {
                 _currentSession.MediaPropertiesChanged -= CurrentSession_MediaPropertiesChanged;
@@ -417,42 +585,45 @@ namespace QuackOSD
                 _currentSession.TimelinePropertiesChanged -= CurrentSession_TimelinePropertiesChanged;
             }
 
+            // Get the new current session
             _currentSession = _sessionManager.GetCurrentSession();
 
             if (_currentSession != null)
             {
-                Debug.WriteLine("Trovata sessione attiva: " + _currentSession.SourceAppUserModelId);
+                // Subscribe to the new session's events
                 _currentSession.MediaPropertiesChanged += CurrentSession_MediaPropertiesChanged;
                 _currentSession.PlaybackInfoChanged += CurrentSession_PlaybackInfoChanged;
-                await UpdateOsdDataAsync(_currentSession);
+                _currentSession.TimelinePropertiesChanged += CurrentSession_TimelinePropertiesChanged;
+
+                // Update OSD data with the new session's info (without showing the OSD)
+                await UpdateOsdDataAsync(_currentSession, showOsd: false);
             }
             else
             {
-                Debug.WriteLine("Nessuna sessione media attiva.");
+                // No active media session
+                Debug.WriteLine("No active media session.");
                 _osdWindow.Visibility = Visibility.Collapsed;
             }
         }
 
+        // Called when the media properties change (e.g., new song).
         private async void CurrentSession_MediaPropertiesChanged(GlobalSystemMediaTransportControlsSession sender, MediaPropertiesChangedEventArgs args)
         {
             try
             {
                 await Dispatcher.InvokeAsync(async () =>
                 {
-                    //if user pressed media key in last 500ms show osd
+                    // Check if a user just pressed a key (e.g., "Next")
                     bool userIntervened = (DateTime.Now - _lastMediaKeyPress).TotalMilliseconds < 500;
-                    //show osd on song change if enabled
+                    // Determine if the OSD should be shown based on user action or settings
                     bool shouldShow = userIntervened || Properties.Settings.Default.ShowOnSongChange || Properties.Settings.Default.IsAlwaysOn;
-
                     await UpdateOsdDataAsync(sender, showOsd: shouldShow);
                 });
             }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Errore MediaPropertiesChanged: {ex.Message}");
-            }
+            catch (Exception ex) { Debug.WriteLine($"Error MediaPropertiesChanged: {ex.Message}"); }
         }
 
+        // Called when the playback state changes (e.g., Playing, Paused).
         private async void CurrentSession_PlaybackInfoChanged(GlobalSystemMediaTransportControlsSession sender, PlaybackInfoChangedEventArgs args)
         {
             try
@@ -462,71 +633,67 @@ namespace QuackOSD
                     var newPlaybackInfo = sender.GetPlaybackInfo();
                     if (newPlaybackInfo == null) return;
 
+                    // Stop/Start the progress timer based on playback state
                     if (newPlaybackInfo.PlaybackStatus != GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing)
                         _progressTimer.Stop();
                     else if (_osdWindow.Visibility == Visibility.Visible && Properties.Settings.Default.ShowTimeLine)
                         _progressTimer.Start();
 
+                    // Re-sync timeline data (captures new position)
                     SyncTimeLine();
-                    //if user pressed media key in last 500ms show osd
+
+                    // Check if the user initiated the change
                     bool userIntervened = (DateTime.Now - _lastMediaKeyPress).TotalMilliseconds < 500;
-                    //show osd on playback state change
+                    // Check if the state actually changed (e.g., from Playing to Paused)
                     bool stateChanged = _lastPlaybackInfo != null && _lastPlaybackInfo.PlaybackStatus != newPlaybackInfo.PlaybackStatus;
-                    //decide if show osd
+                    // Determine if the OSD should be shown
                     bool shouldShow = userIntervened || stateChanged || Properties.Settings.Default.IsAlwaysOn;
 
                     await UpdateOsdDataAsync(sender, showOsd: shouldShow);
 
+                    // Store the new state
                     _lastPlaybackInfo = newPlaybackInfo;
                 });
             }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Errore PlaybackInfoChanged: {ex.Message}");
-            }
+            catch (Exception ex) { Debug.WriteLine($"Error PlaybackInfoChanged: {ex.Message}"); }
         }
 
+        // Called when the timeline properties change (e.g., new song duration, live stream update).
         private async void CurrentSession_TimelinePropertiesChanged(GlobalSystemMediaTransportControlsSession sender, TimelinePropertiesChangedEventArgs args)
         {
             try
             {
+                // Just sync the timeline data
                 await Dispatcher.InvokeAsync(() => SyncTimeLine());
             }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Errore TimelineChanged: {ex.Message}");
-            }
+            catch (Exception ex) { Debug.WriteLine($"Error TimelineChanged: {ex.Message}"); }
         }
 
-        //method for "live preview"
-        private void OnSettingsChanged(Object sender, EventArgs e)
-        {
-            if (_osdWindow.Visibility == Visibility.Visible)
-            {
-                _osdWindow.UpdateAppearance();
-                _osdWindow.UpdatePosition();
-            }
-        }
+        #endregion
 
-        //progress bar
+        #region OSD Logic
+
+        // Synchronizes the local timeline cache with the media session's current state.
         private void SyncTimeLine()
         {
             if (_currentSession == null) return;
-
             var timeline = _currentSession.GetTimelineProperties();
-            _lastPlaybackInfo = _currentSession.GetPlaybackInfo();
+            var playbackInfo = _currentSession.GetPlaybackInfo();
 
-            if (timeline == null) return;
+            if (timeline == null || playbackInfo == null) return;
 
+            // Cache all relevant timeline and playback data
             _lastTimeline = timeline;
-
             _lastPosition = timeline.Position;
-            _lastUpdateTime = DateTime.Now;
-            _playbackRate = _lastPlaybackInfo.PlaybackRate ?? 1.0;
-            _isPlaying = _lastPlaybackInfo.PlaybackStatus == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing;
+            _lastUpdateTime = DateTime.Now; // Record *when* we got this data
+            _playbackRate = playbackInfo.PlaybackRate ?? 1.0;
+            _isPlaying = playbackInfo.PlaybackStatus == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing;
 
+            // Update the progress bar's min/max values
             _osdWindow.MediaProgressBar.Minimum = timeline.StartTime.TotalSeconds;
             _osdWindow.MediaProgressBar.Maximum = timeline.EndTime.TotalSeconds;
+
+            // Update the total time text (e.g., "3:45")
             string newTotalTime = timeline.EndTime.ToString(@"m\:ss");
             if (_lastTotalTimeText != newTotalTime)
             {
@@ -534,131 +701,158 @@ namespace QuackOSD
                 _lastTotalTimeText = newTotalTime;
             }
 
-            //if progress bar is not toggled then stop it
+            // If the timeline is hidden by settings, stop the progress timer
             if (Properties.Settings.Default.ShowTimeLine == false)
             {
                 _progressTimer.Stop();
                 return;
             }
-
+            // Update the visuals immediately with the new data
             UpdateProgressBarVisuals();
         }
 
+        // Updates the OSD progress bar and time text. Called by _progressTimer.
         private void UpdateProgressBarVisuals()
         {
             if (_osdWindow.Visibility != Visibility.Visible) return;
             if (_lastTimeline == null) return;
 
             TimeSpan currentPosition = _lastPosition;
-
             if (_isPlaying)
             {
+                // Estimate the current position based on the last known position,
+                // the time elapsed since then, and the playback rate.
                 double elapsedSeconds = (DateTime.Now - _lastUpdateTime).TotalSeconds;
                 currentPosition += TimeSpan.FromSeconds(elapsedSeconds * _playbackRate);
             }
 
-            if (currentPosition.TotalSeconds > _osdWindow.MediaProgressBar.Maximum) currentPosition = TimeSpan.FromSeconds(_osdWindow.MediaProgressBar.Maximum);
+            // Ensure the calculated position doesn't exceed the maximum
+            if (currentPosition.TotalSeconds > _osdWindow.MediaProgressBar.Maximum)
+                currentPosition = TimeSpan.FromSeconds(_osdWindow.MediaProgressBar.Maximum);
 
+            // Update the progress bar value
             _osdWindow.MediaProgressBar.Value = currentPosition.TotalSeconds;
-            string newTimeText = currentPosition.ToString(@"m\:ss");
 
+            // Update the current time text (e.g., "1:23")
+            string newTimeText = currentPosition.ToString(@"m\:ss");
             if (_lastTimeText != newTimeText)
             {
                 _osdWindow.CurrentTimeText.Text = newTimeText;
                 _lastTimeText = newTimeText;
             }
-
-            _osdWindow.MediaProgressBar.Value = currentPosition.TotalSeconds;
         }
 
-        // --- OSD core ---
+        // The main method for updating all data on the OSD.
+        // <param name="session">The media session to pull data from.</param>
+        // <param name="showOsd">Whether to show the OSD and reset its timer.</param>
         private async Task UpdateOsdDataAsync(GlobalSystemMediaTransportControlsSession session, bool showOsd = true)
         {
             if (session == null) return;
 
+            // Get all media properties and playback info
             var mediaProperties = await session.TryGetMediaPropertiesAsync();
-            _lastPlaybackInfo = session.GetPlaybackInfo();
+            var playbackInfo = session.GetPlaybackInfo();
+            if (playbackInfo == null) return;
 
+            _lastPlaybackInfo = playbackInfo;
+
+            // Update Title, Artist, and Album Art
             if (mediaProperties != null)
             {
-                _osdWindow.TitleTextBlock.Text = mediaProperties.Title ?? "Sconosciuto";
+                _osdWindow.TitleTextBlock.Text = mediaProperties.Title ?? "Unknown";
                 _osdWindow.ArtistTextBlock.Text = mediaProperties.Artist ?? "";
-                //skip loading thumbnail if disabled and background mode is not cover art
-                if (Properties.Settings.Default.ShowCover || Properties.Settings.Default.BackgroundMode == "CoverArt") await LoadThumbnailAsync(mediaProperties.Thumbnail);
-                else _osdWindow.AlbumArtImage.Source = null;
+
+                // Load thumbnail if the setting is enabled
+                if (Properties.Settings.Default.ShowCover || Properties.Settings.Default.BackgroundMode == "CoverArt")
+                    await LoadThumbnailAsync(mediaProperties.Thumbnail);
+                else
+                    _osdWindow.AlbumArtImage.Source = null;
             }
 
-            switch (_lastPlaybackInfo.PlaybackStatus)
+            // Update Play/Pause button icon
+            switch (playbackInfo.PlaybackStatus)
             {
                 case GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing:
-                    _osdWindow.PlayPauseButton.Content = "⏸️";
+                    _osdWindow.PlayPauseButton.Content = "⏸️"; // Pause icon
                     break;
-                case GlobalSystemMediaTransportControlsSessionPlaybackStatus.Paused:
-                case GlobalSystemMediaTransportControlsSessionPlaybackStatus.Stopped:
                 default:
-                    _osdWindow.PlayPauseButton.Content = "▶️";
+                    _osdWindow.PlayPauseButton.Content = "▶️"; // Play icon
                     break;
             }
 
+            // Sync the timeline info
             SyncTimeLine();
+
+            // Show the OSD if requested
             if (showOsd)
             {
                 ShowAndResetOsd();
             }
         }
 
-        //load album art
+        // Asynchronously loads a thumbnail from a media stream and applies it to the OSD.
         private async Task LoadThumbnailAsync(IRandomAccessStreamReference thumbnailReference)
         {
             if (thumbnailReference != null)
             {
                 try
                 {
+                    // Open the stream from the media session
                     using (IRandomAccessStreamWithContentType stream = await thumbnailReference.OpenReadAsync())
                     {
+                        // Load it into a BitmapImage
                         var bitmap = new BitmapImage();
                         bitmap.BeginInit();
-                        bitmap.CacheOption = BitmapCacheOption.OnLoad;
+                        bitmap.CacheOption = BitmapCacheOption.OnLoad; // Cache in memory
                         bitmap.StreamSource = stream.AsStream();
                         bitmap.EndInit();
-                        bitmap.Freeze();
-
+                        bitmap.Freeze(); // Freeze for use on the UI thread
                         _osdWindow.AlbumArtImage.Source = bitmap;
                     }
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine("Errore caricamento copertina: " + ex.Message);
+                    // Handle errors (e.g., disposed stream)
+                    Debug.WriteLine("Error loading thumbnail: " + ex.Message);
                     _osdWindow.AlbumArtImage.Source = null;
                 }
             }
             else
             {
+                // No thumbnail available
                 _osdWindow.AlbumArtImage.Source = null;
             }
         }
 
+        // Shows the OSD, starts its fade-in animation, and resets the hide timer.
         private void ShowAndResetOsd()
         {
-
+            // Check if the OSD was already visible (to avoid re-animating)
             bool wasVisible = (_osdWindow.Visibility == Visibility.Visible && _osdWindow.Opacity > 0.1);
 
-            _progressTimer.Start();
+            // Start the progress timer if needed
+            if (Properties.Settings.Default.ShowTimeLine && _isPlaying)
+                _progressTimer.Start();
 
+            // Re-apply colors (in case they changed in settings)
             _osdWindow.UpdateBackgroundColor();
             _osdWindow.UpdateForegroundColor();
 
-            if (!wasVisible) _osdWindow.AnimateIn();
+            // Start the fade-in animation only if it wasn't already visible
+            if (!wasVisible)
+                _osdWindow.AnimateIn();
 
+            // Reset the hide timer
             ResetOsdTimer();
         }
 
+        // Stops and restarts the OSD hide timer.
         private void ResetOsdTimer()
         {
             _osdHideTimer.Stop();
-
+            // Don't start the timer if "Always On" is enabled
             if (Properties.Settings.Default.IsAlwaysOn) return;
-
+            // Don't start the timer if in "Preview Mode"
             if (!_isPreviewMode)
             {
                 int durationMs = Properties.Settings.Default.OsdDuration;
@@ -667,128 +861,6 @@ namespace QuackOSD
             }
         }
 
-        private void OnApplicationExit(object sender, ExitEventArgs e)
-        {
-            Cleanup();
-        }
-        private void CurrentDomanin_ProcessExit(object sender, EventArgs e)
-        {
-            Cleanup();
-        }
-        private void SystemEvents_SessionEnding(object sender, Microsoft.Win32.SessionEndingEventArgs e)
-        {
-            Cleanup();
-        }
-        //cleanup resources before exit
-        private void Cleanup()
-        {
-            //avoid multiple calls
-            if (_isCleanedUp) return;
-            _isCleanedUp = true;
-
-            try
-            {
-                // Unhook keyboard hook
-                try
-                {
-                    if (_hookID != IntPtr.Zero)
-                    {
-                        bool unhooked = UnhookWindowsHookEx(_hookID);
-                        if (!unhooked)
-                        {
-                            int err = Marshal.GetLastWin32Error();
-                            Debug.WriteLine($"Warning: UnhookWindowsHookEx failed with error {err}");
-                        }
-                        _hookID = IntPtr.Zero;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine("Errore durante Unhook: " + ex.Message);
-                }
-
-                // Dispose notify icon
-                try
-                {
-                    if (_notifyIcon != null)
-                    {
-                        _notifyIcon.Visible = false;
-                        _notifyIcon.DoubleClick -= (s, e) => OpenSettings();
-                        _notifyIcon.Dispose();
-                        _notifyIcon = null;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine("Errore disposing tray icon: " + ex.Message);
-                }
-
-                // Stop timers
-                try
-                {
-                    _osdHideTimer?.Stop();
-                    _progressTimer?.Stop();
-                }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine("Errore stopping timers: " + ex.Message);
-                }
-
-                // Unsubscribe events (safely)
-                try
-                {
-                    if (_sessionManager != null)
-                        _sessionManager.CurrentSessionChanged -= SessionManager_CurrentSessionChanged;
-
-                    if (_currentSession != null)
-                    {
-                        _currentSession.MediaPropertiesChanged -= CurrentSession_MediaPropertiesChanged;
-                        _currentSession.PlaybackInfoChanged -= CurrentSession_PlaybackInfoChanged;
-                        _currentSession.TimelinePropertiesChanged -= CurrentSession_TimelinePropertiesChanged;
-                    }
-
-                    if (_osdWindow != null)
-                    {
-                        _osdWindow.PrevClicked -= OsdWindow_PrevClicked;
-                        _osdWindow.PlayPauseClicked -= OsdWindow_PlayPauseClicked;
-                        _osdWindow.NextClicked -= OsdWindow_NextClicked;
-                        _osdWindow.SeekRequested -= async (percentage) => await OsdWindow_SeekRequested(percentage);
-                        _osdWindow.DragStarted -= OsdWindow_DragStarted;
-                        _osdWindow.DragEnded -= OsdWindow_DragEnded;
-                    }
-
-                    if (_settingsWindow != null)
-                    {
-                        _settingsWindow.IsVisibleChanged -= (s, e) => { /* ... */ };
-                        _settingsWindow.SettingsChanged -= (s, e) => { /* ... */ };
-                        _settingsWindow.Closed -= (s, e) => ExitPreviewMode();
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine("Errore unsubscribing events: " + ex.Message);
-                }
-
-                // Close windows
-                try
-                {
-                    _osdWindow?.Close();
-                    _settingsWindow?.Close();
-                }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine("Errore closing windows: " + ex.Message);
-                }
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine("Errore Cleanup generale: " + ex.Message);
-            }
-        }
-        protected override void OnClosed(EventArgs e)
-        {
-            base.OnClosed(e);
-            Cleanup();
-        }
+        #endregion
     }
 }
