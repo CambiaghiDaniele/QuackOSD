@@ -142,13 +142,13 @@ namespace QuackOSD
             }
 
             TitleTextBlock.Foreground = foregroundBrush;
-            ArtistTextBlock.Foreground = foregroundBrush.Clone();
-            CurrentTimeText.Foreground = foregroundBrush.Clone();
-            TotalTimeText.Foreground = foregroundBrush.Clone();
-            MediaProgressBar.Foreground = foregroundBrush.Clone();
-            PrevButton.Foreground = foregroundBrush.Clone();
-            PlayPauseButton.Foreground = foregroundBrush.Clone();
-            NextButton.Foreground = foregroundBrush.Clone();
+            ArtistTextBlock.Foreground = foregroundBrush;
+            CurrentTimeText.Foreground = foregroundBrush;
+            TotalTimeText.Foreground = foregroundBrush;
+            MediaProgressBar.Foreground = foregroundBrush;
+            PrevButton.Foreground = foregroundBrush;
+            PlayPauseButton.Foreground = foregroundBrush;
+            NextButton.Foreground = foregroundBrush;
 
             //call to UpdateBorder passing brush used for foreground
             UpdateBorderColor(foregroundBrush);
@@ -158,7 +158,7 @@ namespace QuackOSD
         {
             if(Properties.Settings.Default.ShowBorder)
             {
-                BorderContent.BorderBrush = foregroundBrush.Clone();
+                BorderContent.BorderBrush = foregroundBrush;
                 BorderContent.BorderThickness = new Thickness(Properties.Settings.Default.BorderThickness);
             }
             else

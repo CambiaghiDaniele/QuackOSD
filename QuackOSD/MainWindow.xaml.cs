@@ -175,7 +175,7 @@ namespace QuackOSD
                 ContextMenuStrip = trayMenu
             };
             // Show settings on double-click
-            _notifyIcon.DoubleClick += (s, e) => OpenSettings();
+            _notifyIcon.DoubleClick += NotifyIcon_DoubleClick;
 
             // Load the icon from embedded resources
             try
@@ -220,7 +220,11 @@ namespace QuackOSD
             // Reposition the window to ensure it's still in the correct place
             _osdWindow.UpdatePosition();
         }
-
+        // Called when the user double-clicks the tray icon.
+        private void NotifyIcon_DoubleClick(object sender, EventArgs e)
+        {
+            OpenSettings();
+        }
         // Called when the Settings window's visibility changes. Manages "Preview Mode".
         private void SettingsWindow_IsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
         {
@@ -274,8 +278,24 @@ namespace QuackOSD
         protected override void OnClosed(EventArgs e) { base.OnClosed(e); Cleanup(); }
 
         // Called by the KeyboardHookService when a media key is pressed.
-        private void OnMediaKeyPressed(object sender, EventArgs e)
+        private void OnMediaKeyPressed(object sender, KeyboardHookService.MediaKeyEventArgs e)
         {
+            //differentiate between key codes
+            switch (e.KeyCode)
+            {
+                case 0xB3: // VK_MEDIA_PLAY_PAUSE
+                    //TogglePlayPauseFromHook();
+                    break;
+                case 0xB0: // VK_MEDIA_NEXT_TRACK
+                    //NextTrackFromHook();
+                    break;
+                case 0xB1: // VK_MEDIA_PREV_TRACK
+                    //PreviousTrackFromHook();
+                    break;
+                case 0xB2: // VK_MEDIA_STOP
+                    //StopFromHook();
+                    break;
+            }
             // Record the time of the key press
             _lastMediaKeyPress = DateTime.Now;
         }
@@ -371,9 +391,7 @@ namespace QuackOSD
                     if (_notifyIcon != null)
                     {
                         _notifyIcon.Visible = false;
-                        // Note: Unsubscribing from lambda can be tricky, but it's safe here
-                        // because the object is being disposed immediately after.
-                        _notifyIcon.DoubleClick -= (s, e) => OpenSettings();
+                        _notifyIcon.DoubleClick -= NotifyIcon_DoubleClick;
                         _notifyIcon.Dispose();
                         _notifyIcon = null;
                     }

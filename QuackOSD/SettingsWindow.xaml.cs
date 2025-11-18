@@ -18,7 +18,6 @@ namespace QuackOSD
         {
             InitializeComponent();
             Loaded += (s, e) => LoadSettings();
-            _isLoaded = true;
         }
 
         private void LoadSettings()
