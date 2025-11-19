@@ -58,6 +58,11 @@ namespace QuackOSD
         {
             InitializeComponent();
 
+            ColorCanvas.SizeChanged += (s, e) =>
+            {
+                UpdateSelectorPositionFromCurrentColor();
+            };
+
             Loaded += (s, e) =>
             {
                 // initialize the color plane and alpha slider
@@ -65,6 +70,17 @@ namespace QuackOSD
                 UpdateAlphaSlider();
                 UpdateFromHsv(true);
             };
+        }
+        // update the selector position based on current HSV values without recalculating color
+        private void UpdateSelectorPositionFromCurrentColor()
+        {
+            if (ColorCanvas.ActualWidth == 0 || ColorCanvas.ActualHeight == 0) return;
+
+            double x = _saturation * ColorCanvas.ActualWidth;
+            double y = (1.0 - _value) * ColorCanvas.ActualHeight;
+
+            Canvas.SetLeft(ColorSelector, x - 5);
+            Canvas.SetTop(ColorSelector, y - 5);
         }
 
         private void HueSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -109,10 +125,14 @@ namespace QuackOSD
         {
             if (_isUpdatingFromCode) return;
 
+            string text = HexTextBox.Text;
+            if (text.Length < 4 || !text.StartsWith("#")) return;
+
             try
             {
                 // try to convert text to color
                 System.Windows.Media.Color color = ColorConverterHelper.ColorFromString(HexTextBox.Text);
+                if(color == SelectedColor) return; // no change
                 // update public value
                 SelectedColor = color;
             }
@@ -211,8 +231,6 @@ namespace QuackOSD
 
         private void UpdateFromSelectedColor(System.Windows.Media.Color color)
         {
-            if (!IsLoaded || PreviewColorBorder == null) return;
-
             if (_isUpdatingFromCode) return;
 
             // convets color in hsv
@@ -231,18 +249,15 @@ namespace QuackOSD
             // update UI controls
             HueSlider.Value = _hue;
             AlphaSlider.Value = _alpha;
-            HexTextBox.Text = color.ToString();
+            if (!HexTextBox.IsFocused) HexTextBox.Text = color.ToString(); //update only when not writing
             PreviewColorBorder.Background = new SolidColorBrush(color);
 
             // update color plane and alpha slider
             UpdateColorPlane();
             UpdateAlphaSlider();
 
-            // set selector position
-            double x = _saturation * ColorCanvas.ActualWidth;
-            double y = (1.0 - _value) * ColorCanvas.ActualHeight;
-            Canvas.SetLeft(ColorSelector, x - 5);
-            Canvas.SetTop(ColorSelector, y - 5);
+            // update selector position
+            UpdateSelectorPositionFromCurrentColor();
 
             // unblock events
             _isUpdatingFromCode = false;

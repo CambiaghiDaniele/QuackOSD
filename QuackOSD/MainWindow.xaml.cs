@@ -69,6 +69,9 @@ namespace QuackOSD
         // Timestamp of the last physical media key press. Used to differentiate user actions from app-driven events.
         private DateTime _lastMediaKeyPress = DateTime.MinValue;
 
+        // Identifier for the currently loading thumbnail image to prevent loading previous images.
+        private long _thumbnailLoadId = 0;
+
 
         //--- Cached Timeline Info ---
         // These are used by _progressTimer to manually calculate the current playback
@@ -280,24 +283,27 @@ namespace QuackOSD
         // Called by the KeyboardHookService when a media key is pressed.
         private void OnMediaKeyPressed(object sender, KeyboardHookService.MediaKeyEventArgs e)
         {
-            //differentiate between key codes
-            switch (e.KeyCode)
+            Dispatcher.Invoke(async() =>
             {
-                case 0xB3: // VK_MEDIA_PLAY_PAUSE
-                    //TogglePlayPauseFromHook();
-                    break;
-                case 0xB0: // VK_MEDIA_NEXT_TRACK
-                    //NextTrackFromHook();
-                    break;
-                case 0xB1: // VK_MEDIA_PREV_TRACK
-                    //PreviousTrackFromHook();
-                    break;
-                case 0xB2: // VK_MEDIA_STOP
-                    //StopFromHook();
-                    break;
-            }
-            // Record the time of the key press
-            _lastMediaKeyPress = DateTime.Now;
+                //differentiate between key codes
+                switch (e.KeyCode)
+                {
+                    case 0xB3: // VK_MEDIA_PLAY_PAUSE
+                        //TogglePlayPauseFromHook();
+                        break;
+                    case 0xB0: // VK_MEDIA_NEXT_TRACK
+                        //NextTrackFromHook();
+                        break;
+                    case 0xB1: // VK_MEDIA_PREV_TRACK
+                        //PreviousTrackFromHook();
+                        break;
+                    case 0xB2: // VK_MEDIA_STOP
+                        //StopFromHook();
+                        break;
+                }
+                // Record the time of the key press
+                _lastMediaKeyPress = DateTime.Now;
+            });
         }
 
         #endregion
@@ -470,38 +476,59 @@ namespace QuackOSD
         // Called when the "Previous" button is clicked on the OSD.
         private async void OsdWindow_PrevClicked(object sender, RoutedEventArgs e)
         {
-            if (_currentSession != null)
+            try
             {
-                await _currentSession.TrySkipPreviousAsync();
-                ShowAndResetOsd();
+                if (_currentSession != null)
+                {
+                    await _currentSession.TrySkipPreviousAsync();
+                    ShowAndResetOsd();
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("Error in PrevClicked: " + ex.Message);
             }
         }
 
         // Called when the "Play/Pause" button is clicked on the OSD.
         private async void OsdWindow_PlayPauseClicked(object sender, RoutedEventArgs e)
         {
-            if (_currentSession != null)
+            try
             {
-                var playbackInfo = _currentSession.GetPlaybackInfo();
-                if (playbackInfo.PlaybackStatus == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing)
+                if (_currentSession != null)
                 {
-                    await _currentSession.TryPauseAsync();
+                    var playbackInfo = _currentSession.GetPlaybackInfo();
+                    if (playbackInfo.PlaybackStatus == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing)
+                    {
+                        await _currentSession.TryPauseAsync();
+                    }
+                    else
+                    {
+                        await _currentSession.TryPlayAsync();
+                    }
+                    ShowAndResetOsd();
                 }
-                else
-                {
-                    await _currentSession.TryPlayAsync();
-                }
-                ShowAndResetOsd();
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("Error in PlayPauseClicked: " + ex.Message);
             }
         }
 
         // Called when the "Next" button is clicked on the OSD.
         private async void OsdWindow_NextClicked(object sender, RoutedEventArgs e)
         {
-            if (_currentSession != null)
+            try
             {
-                await _currentSession.TrySkipNextAsync();
-                ShowAndResetOsd();
+                if (_currentSession != null)
+                {
+                    await _currentSession.TrySkipNextAsync();
+                    ShowAndResetOsd();
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("Error in NextClicked: " + ex.Message);
             }
         }
 
@@ -811,6 +838,9 @@ namespace QuackOSD
         // Asynchronously loads a thumbnail from a media stream and applies it to the OSD.
         private async Task LoadThumbnailAsync(IRandomAccessStreamReference thumbnailReference)
         {
+            _thumbnailLoadId++; // Increment to invalidate previous loads
+            long currentLoadId = _thumbnailLoadId;
+
             if (thumbnailReference != null)
             {
                 try
@@ -818,6 +848,7 @@ namespace QuackOSD
                     // Open the stream from the media session
                     using (IRandomAccessStreamWithContentType stream = await thumbnailReference.OpenReadAsync())
                     {
+                        if (currentLoadId != _thumbnailLoadId) return; // A newer load has been initiated; cancel this one
                         // Load it into a BitmapImage
                         var bitmap = new BitmapImage();
                         bitmap.BeginInit();
@@ -825,7 +856,12 @@ namespace QuackOSD
                         bitmap.StreamSource = stream.AsStream();
                         bitmap.EndInit();
                         bitmap.Freeze(); // Freeze for use on the UI thread
-                        _osdWindow.AlbumArtImage.Source = bitmap;
+
+                        if (currentLoadId == _thumbnailLoadId)
+                        {
+                            _osdWindow.AlbumArtImage.Source = bitmap;
+                            if (Properties.Settings.Default.BackgroundMode == "CoverArt") _osdWindow.UpdateBackgroundColor();
+                        }
                     }
                 }
                 catch (Exception ex)

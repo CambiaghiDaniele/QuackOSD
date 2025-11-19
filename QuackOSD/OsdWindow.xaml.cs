@@ -1,12 +1,12 @@
 ﻿using System.Windows;
 using System.Windows.Media.Animation;
 using System.Windows.Media;
-using System.Windows.Media.Effects;
 using System.Windows.Media.Imaging;
 using Microsoft.Win32;
 using Windows.UI.ViewManagement;
 using System.Runtime.InteropServices;
 using System.Windows.Interop;
+using Windows.UI.ViewManagement;
 
 namespace QuackOSD
 {
@@ -25,23 +25,43 @@ namespace QuackOSD
 
         //store current bg color for contrast calculation
         private System.Windows.Media.Color _currentBgColorForContrast = Colors.Black;
+        private System.Windows.Media.Color _overLayColor = System.Windows.Media.Color.FromArgb(0xCC, 0, 0, 0); //CC000000
 
         // WinAPI constants and functions for click-through
         private IntPtr _hwnd;
         private const int GWL_EXSTYLE = -20;
         private const int WS_EX_TRANSPARENT = 0x20;
 
-        [DllImport("user32.dll")]
-        private static extern int GetWindowLong(IntPtr hwnd, int index);
-
-        [DllImport("user32.dll")]
-        private static extern int SetWindowLong(IntPtr hwnd, int index, int newStyle);
-
         public OsdWindow()
         {
             InitializeComponent();
-
+            //set initial overlay color for cover art background mode
+            BgOverlay.Fill = new SolidColorBrush(_overLayColor);
+            //get window handle on source initialized
             this.SourceInitialized += (s, e) => { _hwnd = new WindowInteropHelper(this).Handle; };
+        }
+
+        [DllImport("user32.dll", EntryPoint = "GetWindowLongPtr")]
+        private static extern int GetWindowLong64(IntPtr hWnd, int nIndex);
+
+        [DllImport("user32.dll", EntryPoint = "GetWindowLong")]
+        private static extern int GetWindowLong32(IntPtr hWnd, int nIndex);
+
+        [DllImport("user32.dll", EntryPoint = "SetWindowLongPtr")]
+        private static extern int SetWindowLong64(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
+
+        [DllImport("user32.dll", EntryPoint = "SetWindowLong")]
+        private static extern int SetWindowLong32(IntPtr hWnd, int nIndex, int dwNewLong);
+
+        private static IntPtr GetWindowLongPtr(IntPtr hWnd, int nIndex)
+        {
+            if (IntPtr.Size == 8) return GetWindowLong64(hWnd, nIndex);
+            else return (IntPtr)GetWindowLong32(hWnd, nIndex);
+        }
+        private static IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong)
+        {
+            if (IntPtr.Size == 8) return SetWindowLong64(hWnd, nIndex, dwNewLong);
+            else return (IntPtr)SetWindowLong32(hWnd, nIndex, dwNewLong.ToInt32());
         }
 
         public void UpdateAppearance()
@@ -97,12 +117,25 @@ namespace QuackOSD
                     break;
                 case "CoverArt":
                     ImageSource coverSource = AlbumArtImage.Source;
-                    if (coverSource != null)
+                    if (coverSource != null /*&& coverSource is BitmapSource bmpSource*/)
                     {
                         BlurredImage.Source = coverSource;
                         BlurredImage.Visibility = Visibility.Visible;
                         BgOverlay.Visibility = Visibility.Visible;
-                        backgroundBrush = System.Windows.Media.Brushes.Transparent; //actual bg is from blurred image
+
+                        //freeze bitmap to make it cross-thread accessible
+                        //var frozenBmp = bmpSource.Clone();
+                        //frozenBmp.Freeze();
+                        //set blurred image source in background thread
+                        //Task.Run(() => { //not necessary });
+
+                        if (BgOverlay.Fill is SolidColorBrush overlayBrush && overlayBrush.Color != _overLayColor)
+                        {
+                            BgOverlay.Fill = new SolidColorBrush(_overLayColor);
+                        }
+                        System.Windows.Media.Color averageCoverColor = GetAverageColorWithOverlay(coverSource, _overLayColor);
+                        backgroundBrush = new SolidColorBrush(averageCoverColor);
+                        effectiveBgColor = averageCoverColor;
                     }
                     else
                     {
@@ -302,9 +335,12 @@ namespace QuackOSD
         {
             if (_hwnd == IntPtr.Zero) return;
 
-            int extendedStyle = GetWindowLong(_hwnd, GWL_EXSTYLE);
-            if (enabled) SetWindowLong(_hwnd, GWL_EXSTYLE, extendedStyle | WS_EX_TRANSPARENT);
-            else SetWindowLong(_hwnd, GWL_EXSTYLE, extendedStyle & ~WS_EX_TRANSPARENT);
+            IntPtr extendedStylePtr = GetWindowLongPtr(_hwnd, GWL_EXSTYLE);
+            long extendedStyle = extendedStylePtr.ToInt64();
+            if (enabled)
+                SetWindowLongPtr(_hwnd, GWL_EXSTYLE, (IntPtr)(extendedStyle | WS_EX_TRANSPARENT));
+            else
+                SetWindowLongPtr(_hwnd, GWL_EXSTYLE, (IntPtr)(extendedStyle & ~WS_EX_TRANSPARENT));
         }
 
         // progress bar dragging handlers
@@ -417,6 +453,63 @@ namespace QuackOSD
             {
                 return pos.Contains("Top") ? -h - safeMargin : SystemParameters.PrimaryScreenHeight + safeMargin;
             }
+        }
+        //calculate average color of an ImageSource with overlay blending (to calculate contrast if background is coverArt)
+        public static System.Windows.Media.Color GetAverageColorWithOverlay(ImageSource source, System.Windows.Media.Color overlay)
+        {
+            var drawingVisual = new DrawingVisual();
+            using (var drawingContext = drawingVisual.RenderOpen())
+            {
+                drawingContext.DrawImage(source, new Rect(0, 0, 50, 50));
+            }
+
+            var renderTarget = new RenderTargetBitmap(50, 50, 96, 96, PixelFormats.Pbgra32);
+            renderTarget.Render(drawingVisual);
+
+            // converts to BGRA32 format for easier pixel manipulation
+            var formattedBitmap = new FormatConvertedBitmap(renderTarget, PixelFormats.Bgra32, null, 0);
+
+            int width = formattedBitmap.PixelWidth;
+            int height = formattedBitmap.PixelHeight;
+            int stride = width * 4;
+            byte[] pixels = new byte[stride * height];
+            formattedBitmap.CopyPixels(pixels, stride, 0);
+
+            double rSum = 0, gSum = 0, bSum = 0;
+            double pixelCount = width * height;
+
+            double alphaOverlay = overlay.A / 255.0;
+            double invAlpha = 1.0 - alphaOverlay;
+
+            double overlayR = overlay.R * alphaOverlay;
+            double overlayG = overlay.G * alphaOverlay;
+            double overlayB = overlay.B * alphaOverlay;
+
+            for (int i = 0; i < pixels.Length; i += 4)
+            {
+                byte b = pixels[i];
+                byte g = pixels[i + 1];
+                byte r = pixels[i + 2];
+                byte a = pixels[i + 3];
+
+                // convert alpha to 0.0 - 1.0 range
+                double alphaImg = a / 255.0;
+
+                // apply overlay blending
+                double rFinal = r * alphaImg * invAlpha + overlay.R * alphaOverlay;
+                double gFinal = g * alphaImg * invAlpha + overlay.G * alphaOverlay;
+                double bFinal = b * alphaImg * invAlpha + overlay.B * alphaOverlay;
+
+                rSum += rFinal;
+                gSum += gFinal;
+                bSum += bFinal;
+            }
+
+            byte avgR = (byte)(rSum / pixelCount);
+            byte avgG = (byte)(gSum / pixelCount);
+            byte avgB = (byte)(bSum / pixelCount);
+
+            return System.Windows.Media.Color.FromRgb(avgR, avgG, avgB);
         }
 
         //ui button handlers

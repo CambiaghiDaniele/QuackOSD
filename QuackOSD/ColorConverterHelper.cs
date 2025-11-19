@@ -47,6 +47,12 @@ public static class ColorConverterHelper
     /// <returns>Il colore RGB corrispondente.</returns>
     public static System.Windows.Media.Color HsvToRgb(double h, double s, double v, byte alpha = 255)
     {
+        s = Math.Max(0, Math.Min(1, s));
+        v = Math.Max(0, Math.Min(1, v));
+
+        h = h % 360;
+        if(h < 0) h += 360;
+
         double r = 0, g = 0, b = 0;
 
         if (s == 0)
@@ -71,6 +77,7 @@ public static class ColorConverterHelper
                 case 3: r = p; g = q; b = v; break;
                 case 4: r = t; g = p; b = v; break;
                 case 5: r = v; g = p; b = q; break;
+                default: r = v; g = p; b = q; break;
             }
         }
 

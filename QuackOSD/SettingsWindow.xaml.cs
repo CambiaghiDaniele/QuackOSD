@@ -2,10 +2,9 @@
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Media;
 using Microsoft.Win32;
 using System.Reflection;
-using Windows.Media.Playback;
+using System.Diagnostics;
 
 namespace QuackOSD
 {
@@ -14,10 +13,15 @@ namespace QuackOSD
         public event EventHandler SettingsChanged;
 
         private bool _isLoaded = false;
+
+        public bool isForceClosing { get; set; } = false;
         public SettingsWindow()
         {
             InitializeComponent();
-            Loaded += (s, e) => LoadSettings();
+            Loaded += (s, e) =>
+            {
+                if (!_isLoaded) LoadSettings();
+            };
         }
 
         private void LoadSettings()
@@ -125,10 +129,7 @@ namespace QuackOSD
             if (!_isLoaded) return;
 
             if (int.TryParse(MarginHBox.Text, out int h)) Properties.Settings.Default.MarginHorizontal = h;
-            else Properties.Settings.Default.MarginHorizontal = 0;
-
             if (int.TryParse(MarginVBox.Text, out int v)) Properties.Settings.Default.MarginVertical = v;
-            else Properties.Settings.Default.MarginVertical = 0;
 
             Properties.Settings.Default.Save();
             SettingsChanged?.Invoke(this, EventArgs.Empty);
@@ -154,7 +155,6 @@ namespace QuackOSD
 
             if(!isAlwaysOn)
             {
-                isClickThrough = false;
                 IsClickThroughCheck.IsChecked = false;
             }
 
@@ -182,14 +182,17 @@ namespace QuackOSD
             try
             {
                 string appName = "QuackOSD";
-                string appPath = Assembly.GetExecutingAssembly().Location;
+                string appPath = Process.GetCurrentProcess().MainModule.FileName;
 
                 if (appPath.EndsWith(".dll")) appPath = appPath.Replace(".dll", ".exe");
 
-                RegistryKey rk = Registry.CurrentUser.OpenSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", true);
+                using (RegistryKey rk = Registry.CurrentUser.OpenSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", true))
+                {
+                    if(rk == null) return;
 
-                if (enable) rk.SetValue(appName, $"\"{appPath}\"");
-                else if (rk.GetValue(appName) != null) rk.DeleteValue(appName);
+                    if (enable) rk.SetValue(appName, $"\"{appPath}\"");
+                    else if (rk.GetValue(appName) != null) rk.DeleteValue(appName);
+                };
             }
             catch (Exception ex)
             {
@@ -353,11 +356,15 @@ namespace QuackOSD
             BorderThicknessSlider.IsEnabled = ShowBorderCheck.IsChecked == true;
         }
 
-        //cancel the closing of the window, just hide it
+        //cancel the closing of the window (if not forced), just hide it
         protected override void OnClosing(CancelEventArgs e)
         {
+            if (isForceClosing) {
+                base.OnClosing(e);
+                return;
+            }
             e.Cancel = true;
-            this.Hide();
+            this.Hide(); //hide window
         }
 
         private void CloseButton_Click(object sender, RoutedEventArgs e)

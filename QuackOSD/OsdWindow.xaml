@@ -78,7 +78,7 @@
                             Visibility="Collapsed" />
                     </Border>
 
-                    <Rectangle x:Name="BgOverlay" Fill="#CC000000" Visibility="Collapsed"
+                    <Rectangle x:Name="BgOverlay" Visibility="Collapsed"
                    Width="{Binding ActualWidth, ElementName=BackgroundCanvas}"
                    Height="{Binding ActualHeight, ElementName=BackgroundCanvas}"/>
                 </Canvas>
