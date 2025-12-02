@@ -283,8 +283,12 @@ namespace QuackOSD
         // Called by the KeyboardHookService when a media key is pressed.
         private void OnMediaKeyPressed(object sender, KeyboardHookService.MediaKeyEventArgs e)
         {
+            if (_isCleanedUp) return;
+
             Dispatcher.Invoke(async() =>
             {
+                if (_isCleanedUp) return;
+
                 //differentiate between key codes
                 switch (e.KeyCode)
                 {
@@ -385,7 +389,7 @@ namespace QuackOSD
                     if (_keyboardHook != null)
                     {
                         _keyboardHook.MediaKeyPressed -= OnMediaKeyPressed;
-                        _keyboardHook.Stop();
+                        _keyboardHook.Dispose();
                         _keyboardHook = null;
                     }
                 }
@@ -611,9 +615,13 @@ namespace QuackOSD
         // Called when the active media session changes (e.g., switching from Spotify to YouTube).
         private void SessionManager_CurrentSessionChanged(GlobalSystemMediaTransportControlsSessionManager sender, CurrentSessionChangedEventArgs args)
         {
+            if (_isCleanedUp) return;
+
             // Switch to the UI thread to handle session changes
             _ = Dispatcher.InvokeAsync(async () =>
             {
+                if (_isCleanedUp) return;
+
                 Debug.WriteLine("=== Session Changed ===");
                 await TrySubscribeToCurrentSessionAsync();
             });
